@@ -18,7 +18,34 @@ A fast, portable CLI to authenticate with Linear and read/create issues via Line
 
 ## Installation
 
-Option 1: Build and install from source
+Option 1: Homebrew (macOS and Linux)
+
+```bash
+# Either install directly from the tap in one step:
+brew install nikpietanze/tap/linear-cli
+
+# Or add the tap explicitly, then install:
+brew tap nikpietanze/tap
+brew install linear-cli
+
+# Upgrade later
+brew upgrade linear-cli
+```
+
+Option 2: Download a release binary
+
+```bash
+# Go to the GitHub Releases page and download the archive for your OS/arch
+# Example (macOS ARM64):
+curl -L -o linear-cli.tar.gz \
+  https://github.com/nikpietanze/linear-cli/releases/download/v0.1.0/linear-cli_v0.1.0_darwin_arm64.tar.gz
+tar -xzf linear-cli.tar.gz
+chmod +x linear-cli
+mv linear-cli /usr/local/bin/linear-cli   # or somewhere on your PATH
+linear-cli --help
+```
+
+Option 3: Build and install from source
 
 ```bash
 # Clone the repo
@@ -35,7 +62,7 @@ export PATH="$(go env GOPATH)/bin:$PATH"
 linear-cli --help
 ```
 
-Option 2: Local build without installing globally
+Option 4: Local build without installing globally
 
 ```bash
 # From the project root
@@ -150,6 +177,16 @@ Remove the binary from your Go bin and delete the config directory:
 rm -f "$(go env GOPATH)/bin/linear-cli"
 rm -rf ~/.config/linear
 ```
+
+## Homebrew: Tap vs Homebrew Core
+
+- Ruby formulae are the standard way to package software for Homebrew. Your formula lives in a "tap" (a Git repo with Ruby files), which users can add with `brew tap`.
+- Installing without a tap prefix (i.e. `brew install linear-cli`) requires submitting the formula to Homebrew Core (`homebrew/homebrew-core`). That has stricter requirements:
+  - Stable release tags and changelogs
+  - Reproducible builds, tests, and style conformance
+  - Project maturity and maintenance expectations
+
+We’ve published an official tap at `nikpietanze/tap`, so users can install with `brew install nikpietanze/tap/linear-cli` today. If we want `brew install linear-cli` without the tap prefix, we can upstream to Homebrew Core after a few more stable releases.
 
 ## Security
 
