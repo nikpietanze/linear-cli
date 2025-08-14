@@ -7,6 +7,7 @@ A fast, portable CLI to authenticate with Linear and read/create issues via Line
 - Auth: login, status, and connectivity test
 - Projects: list projects (name, id, status)
 - Issues: list with filters, view full details, and create
+  - Comments: add comments to issues
 - JSON output for scripting, tabular by default
 - No-delete safety: destructive operations are not implemented and blocked at transport
 
@@ -94,6 +95,12 @@ Create an issue:
 
 ```bash
 linear-cli issues create --title "New bug" --description "Steps to reproduce..." --project "Website" --assignee "Jane" --label "bug" --priority 2
+
+Add a comment:
+
+```bash
+linear-cli comment create --key ENG-123 --body "Ship it!"
+```
 
 List projects:
 

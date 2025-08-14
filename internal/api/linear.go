@@ -61,6 +61,7 @@ func NewClient(apiKey string) *Client {
         endpoint:   "https://api.linear.app/graphql",
         allowedMutations: map[string]struct{}{
             "issueCreate": {},
+            "commentCreate": {},
         },
     }
 }
@@ -482,4 +483,46 @@ func (c *Client) CreateIssueAdvanced(in IssueCreateInput) (*IssueDetails, error)
     var proj *Project
     if n.Project != nil { proj = &Project{ID: n.Project.ID, Name: n.Project.Name, State: n.Project.State, TeamID: n.Project.Team.ID} }
     return &IssueDetails{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, StateName: n.State.Name, Assignee: n.Assignee, Labels: n.Labels.Nodes, Project: proj}, nil
+}
+
+// --- Comments ---
+
+type Comment struct {
+    ID   string `json:"id"`
+    Body string `json:"body"`
+}
+
+type CommentResult struct {
+    Comment   Comment `json:"comment"`
+    IssueID   string  `json:"issueId"`
+    IssueURL  string  `json:"issueUrl"`
+    IssueKey  string  `json:"issueKey"`
+}
+
+func (c *Client) CreateComment(issueID, body string) (*CommentResult, error) {
+    const q = `mutation($input: CommentCreateInput!){ commentCreate(input:$input){ success comment{ id body issue{ id url identifier } } } }`
+    vars := map[string]interface{}{
+        "input": map[string]interface{}{
+            "issueId": issueID,
+            "body":    body,
+        },
+    }
+    var resp struct {
+        CommentCreate struct {
+            Success bool `json:"success"`
+            Comment *struct {
+                ID    string `json:"id"`
+                Body  string `json:"body"`
+                Issue struct{
+                    ID         string `json:"id"`
+                    URL        string `json:"url"`
+                    Identifier string `json:"identifier"`
+                } `json:"issue"`
+            } `json:"comment"`
+        } `json:"commentCreate"`
+    }
+    if err := c.do(q, vars, &resp); err != nil { return nil, err }
+    if !resp.CommentCreate.Success || resp.CommentCreate.Comment == nil { return nil, errors.New("comment creation failed") }
+    n := resp.CommentCreate.Comment
+    return &CommentResult{Comment: Comment{ID: n.ID, Body: n.Body}, IssueID: n.Issue.ID, IssueURL: n.Issue.URL, IssueKey: n.Issue.Identifier}, nil
 }
