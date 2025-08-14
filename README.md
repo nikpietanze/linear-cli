@@ -55,12 +55,12 @@ Check status:
 
 ```bash
 linear-cli auth status
+```
 
 CI health check (non-zero exit on failure):
 
 ```bash
 linear-cli auth test
-```
 ```
 
 ## Usage
@@ -76,18 +76,19 @@ Get an issue by ID or key:
 ```bash
 linear-cli issues get --id <ISSUE_ID>
 linear-cli issues get --key ENG-123
+```
 
 View full details:
 
 ```bash
 linear-cli issues view <ISSUE_ID>
 ```
-```
 
 Create an issue:
 
 ```bash
 linear-cli issues create --title "New bug" --description "Steps to reproduce..." --project "Website" --assignee "Jane" --label "bug" --priority 2
+```
 
 Add a comment:
 
@@ -100,6 +101,32 @@ List projects (requires token with read access to projects/organization):
 ```bash
 linear-cli projects list
 ```
+
+### Quick state filters
+
+Frequently filter large lists by state using shortcuts:
+
+```bash
+# Todo
+linear-cli issues list --todo
+linear-cli issues todo
+
+# In Progress
+linear-cli issues list --doing
+linear-cli issues doing
+
+# Done (JSON)
+linear-cli issues list --done --json
+linear-cli issues done --json
+
+# Combine with other flags
+linear-cli issues doing --project "Website" --limit 20
+```
+
+You can still use the explicit state flag:
+
+```bash
+linear-cli issues list --state "In Progress"
 ```
 
 ## Configuration
