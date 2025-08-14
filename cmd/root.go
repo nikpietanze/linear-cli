@@ -34,6 +34,7 @@ func Execute() {
 func init() {
     // Global flags
     rootCmd.PersistentFlags().BoolP("json", "j", false, "Output JSON for scripting")
+    // Allow tests to inject a custom API endpoint via env; document via hidden flag if needed later
 }
 
 // helper to access a shared output.Printer from commands

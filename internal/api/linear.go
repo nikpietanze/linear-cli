@@ -5,6 +5,7 @@ import (
     "encoding/json"
     "errors"
     "fmt"
+    "os"
     "net/http"
     "regexp"
     "strings"
@@ -54,10 +55,14 @@ type Issue struct {
 }
 
 func NewClient(apiKey string) *Client {
+    endpoint := "https://api.linear.app/graphql"
+    if v := os.Getenv("LINEAR_API_ENDPOINT"); strings.TrimSpace(v) != "" {
+        endpoint = strings.TrimSpace(v)
+    }
     return &Client{
         httpClient: &http.Client{Timeout: 15 * time.Second},
         apiKey:     apiKey,
-        endpoint:   "https://api.linear.app/graphql",
+        endpoint:   endpoint,
         allowedMutations: map[string]struct{}{
             "issueCreate": {},
             "commentCreate": {},
