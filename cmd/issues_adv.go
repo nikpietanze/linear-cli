@@ -3,6 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
+    "regexp"
+    "strconv"
 	"strings"
 
 	"linear-cli/internal/api"
@@ -21,15 +23,24 @@ var issuesViewCmd = &cobra.Command{
 		cfg, _ := config.Load()
 		if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
 		client := api.NewClient(cfg.APIKey)
-		id := strings.TrimSpace(args[0])
+        raw := strings.TrimSpace(args[0])
         comments, _ := cmd.Flags().GetInt("comments")
         var det *api.IssueDetails
         var err error
-        if comments > 0 {
-            det, err = client.GetIssueDetailsWithComments(id, comments)
-        } else {
-            det, err = client.GetIssueDetails(id)
+        // Accept either an issue ID or a key like TEAM-123
+        id := raw
+        if m := regexp.MustCompile(`^([A-Z]+)-(\d+)$`).FindStringSubmatch(strings.ToUpper(raw)); len(m) == 3 {
+            teamKey := m[1]
+            num, _ := strconv.Atoi(m[2])
+            team, errT := client.TeamByKey(teamKey)
+            if errT != nil { return errT }
+            if team == nil { return fmt.Errorf("team with key %s not found", teamKey) }
+            iss, errK := client.IssueByKey(team.ID, num)
+            if errK != nil { return errK }
+            if iss == nil { return fmt.Errorf("issue %s not found", raw) }
+            id = iss.ID
         }
+        if comments > 0 { det, err = client.GetIssueDetailsWithComments(id, comments) } else { det, err = client.GetIssueDetails(id) }
 		if err != nil { return err }
 		if det == nil { return fmt.Errorf("issue %s not found", id) }
 		p := printer(cmd)
