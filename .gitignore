@@ -16,7 +16,8 @@
 # macOS
 .DS_Store
 
-# Local env files
+# Local env files (not used by CLI)
+# Keeping ignore patterns in case users create them locally
 .env
 .env.local
 .env.*.local

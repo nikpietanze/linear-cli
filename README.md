@@ -48,14 +48,7 @@ go build -o ./dist/linear-cli .
 You can pass your API key via flag, environment, or interactive prompt.
 
 - Flag: `linear-cli auth login --token <YOUR_TOKEN>`
-- Environment: either set `LINEAR_API_KEY=<YOUR_TOKEN>` or create a `.env.local` file:
-
-```ini
-# .env.local
-LINEAR_API_KEY=lin_xxx
-```
-
-The CLI auto-loads `.env.local` and `.env` without overwriting existing environment variables.
+- Environment: set `LINEAR_API_KEY=<YOUR_TOKEN>` in your shell profile
 - Prompt: run `linear-cli auth login` and paste when prompted
 
 Check status:
@@ -114,7 +107,7 @@ linear-cli projects list
 - Env var: `LINEAR_API_KEY`
 - Config file (optional): `~/.config/linear/config.toml`
 
-Example TOML:
+Example TOML (created by `linear-cli auth login`):
 
 ```toml
 api_key = "lin_xxx..."

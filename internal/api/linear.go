@@ -109,7 +109,14 @@ func (c *Client) do(query string, variables map[string]interface{}, out interfac
     }
     if resp == nil { return errors.New("no response from Linear API") }
     defer resp.Body.Close()
-    if resp.StatusCode >= 400 { return fmt.Errorf("linear api error: %s", resp.Status) }
+    if resp.StatusCode >= 400 {
+        // Try to decode GraphQL errors for a clearer message
+        var gr gqlResponse
+        if err := json.NewDecoder(resp.Body).Decode(&gr); err == nil && len(gr.Errors) > 0 {
+            return fmt.Errorf("linear api error: %s: %s", resp.Status, gr.Errors[0].Message)
+        }
+        return fmt.Errorf("linear api error: %s", resp.Status)
+    }
     var gr gqlResponse
     if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil { return err }
     if len(gr.Errors) > 0 { return errors.New(gr.Errors[0].Message) }
