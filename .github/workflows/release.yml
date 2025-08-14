@@ -31,7 +31,7 @@ jobs:
         run: |
           OUT="linear-cli"
           if [ "${{ matrix.goos }}" = "windows" ]; then OUT="linear-cli.exe"; fi
-          go build -ldflags="-s -w" -o "$OUT" .
+          go build -ldflags="-s -w -X 'linear-cli/cmd.buildVersion=${VERSION}' -X 'linear-cli/cmd.buildCommit=${GITHUB_SHA::7}'" -o "$OUT" .
           ARCHIVE="linear-cli_${{ env.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
           tar -czf "dist/$ARCHIVE" "$OUT" LICENSE README.md
       - name: Upload assets
