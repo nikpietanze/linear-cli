@@ -1,0 +1,17 @@
+# Build artifacts
+/dist/
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Go modules
+/vendor/
+
+# macOS
+.DS_Store
