@@ -48,10 +48,30 @@ jobs:
           go build -ldflags="-s -w -X 'linear-cli/cmd.buildVersion=${VERSION}' -X 'linear-cli/cmd.buildCommit=${GITHUB_SHA::7}'" -o "$OUT" .
           ARCHIVE="linear-cli_${{ env.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
           tar -czf "dist/$ARCHIVE" "$OUT" LICENSE README.md
+      - name: Generate release notes from CHANGELOG
+        run: |
+          set -euo pipefail
+          if [ -f CHANGELOG.md ]; then
+            awk -v ver="${VERSION}" '
+              $0 ~ "^## \\"[" ver "\\\"]" {flag=1; next}
+              /^## / && flag {exit}
+              flag {print}
+            ' CHANGELOG.md > RELEASE_NOTES.md || true
+          fi
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "linear-cli ${VERSION}" > NOTES.md
+          else
+            {
+              echo "linear-cli ${VERSION}";
+              echo;
+              cat RELEASE_NOTES.md;
+            } > NOTES.md
+          fi
       - name: Upload assets
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.tar.gz
           tag_name: ${{ inputs.version }}
+          body_path: NOTES.md
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
