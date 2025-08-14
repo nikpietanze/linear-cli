@@ -178,16 +178,6 @@ rm -f "$(go env GOPATH)/bin/linear-cli"
 rm -rf ~/.config/linear
 ```
 
-## Homebrew: Tap vs Homebrew Core
-
-- Ruby formulae are the standard way to package software for Homebrew. Your formula lives in a "tap" (a Git repo with Ruby files), which users can add with `brew tap`.
-- Installing without a tap prefix (i.e. `brew install linear-cli`) requires submitting the formula to Homebrew Core (`homebrew/homebrew-core`). That has stricter requirements:
-  - Stable release tags and changelogs
-  - Reproducible builds, tests, and style conformance
-  - Project maturity and maintenance expectations
-
-We’ve published an official tap at `nikpietanze/tap`, so users can install with `brew install nikpietanze/tap/linear-cli` today. If we want `brew install linear-cli` without the tap prefix, we can upstream to Homebrew Core after a few more stable releases.
-
 ## Security
 
 This CLI intentionally does not implement delete/archive operations. At the transport layer, a guard rejects any GraphQL mutation that attempts deletion or archival, and only a small allowlist of mutations is permitted (currently: issueCreate).
