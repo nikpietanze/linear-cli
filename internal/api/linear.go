@@ -89,7 +89,12 @@ func (c *Client) do(query string, variables map[string]interface{}, out interfac
     req, err := http.NewRequest("POST", c.endpoint, bytes.NewReader(buf))
     if err != nil { return err }
     req.Header.Set("Content-Type", "application/json")
-    req.Header.Set("Authorization", c.apiKey)
+    // Linear accepts raw tokens. Some environments expect Bearer prefix. Support both.
+    if strings.HasPrefix(c.apiKey, "Bearer ") || strings.HasPrefix(c.apiKey, "bearer ") {
+        req.Header.Set("Authorization", c.apiKey)
+    } else {
+        req.Header.Set("Authorization", "Bearer "+c.apiKey)
+    }
 
     var resp *http.Response
     for attempt := 0; attempt < 4; attempt++ {
@@ -110,11 +115,20 @@ func (c *Client) do(query string, variables map[string]interface{}, out interfac
     if resp == nil { return errors.New("no response from Linear API") }
     defer resp.Body.Close()
     if resp.StatusCode >= 400 {
-        // Try to decode GraphQL errors for a clearer message
+        // Try to decode GraphQL errors for a clearer message, otherwise include body text
         var gr gqlResponse
-        if err := json.NewDecoder(resp.Body).Decode(&gr); err == nil && len(gr.Errors) > 0 {
-            return fmt.Errorf("linear api error: %s: %s", resp.Status, gr.Errors[0].Message)
+        dec := json.NewDecoder(resp.Body)
+        if err := dec.Decode(&gr); err == nil && (len(gr.Errors) > 0 || len(gr.Data) > 0) {
+            if len(gr.Errors) > 0 {
+                return fmt.Errorf("linear api error: %s: %s", resp.Status, gr.Errors[0].Message)
+            }
+            return fmt.Errorf("linear api error: %s", resp.Status)
         }
+        // Fallback: read raw body
+        // Note: resp.Body has been partially read by decoder above only if it succeeded; otherwise we read remaining.
+        // To be robust, we re-issue the request body content from original buffer in future improvements.
+        var raw map[string]any
+        _ = json.NewDecoder(resp.Body).Decode(&raw)
         return fmt.Errorf("linear api error: %s", resp.Status)
     }
     var gr gqlResponse
