@@ -23,7 +23,14 @@ var projectsListCmd = &cobra.Command{
 		cfg, _ := config.Load()
 		if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
 		client := api.NewClient(cfg.APIKey)
-    ps, err := client.ListProjects()
+        details, _ := cmd.Flags().GetBool("details")
+        var ps []api.Project
+        var err error
+        if details {
+            ps, err = client.ListProjectsDetailed()
+        } else {
+            ps, err = client.ListProjects()
+        }
     if err != nil {
         if printer(cmd).JSONEnabled() {
             printer(cmd).PrintError(err)
@@ -35,10 +42,11 @@ var projectsListCmd = &cobra.Command{
 		if p.JSONEnabled() {
 			return p.PrintJSON(ps)
 		}
-    head := []string{"ID", "Name"}
+        var head []string
+        if details { head = []string{"ID", "Name", "State", "URL"} } else { head = []string{"ID", "Name"} }
 		rows := make([][]string, 0, len(ps))
 		for _, pr := range ps {
-        rows = append(rows, []string{pr.ID, pr.Name})
+            if details { rows = append(rows, []string{pr.ID, pr.Name, pr.State, pr.URL}) } else { rows = append(rows, []string{pr.ID, pr.Name}) }
 		}
 		return p.Table(head, rows)
 	},
@@ -47,4 +55,5 @@ var projectsListCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(projectsCmd)
 	projectsCmd.AddCommand(projectsListCmd)
+    projectsListCmd.Flags().Bool("details", false, "Show additional fields (state, url)")
 }

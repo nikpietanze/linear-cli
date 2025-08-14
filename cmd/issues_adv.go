@@ -22,7 +22,14 @@ var issuesViewCmd = &cobra.Command{
 		if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
 		client := api.NewClient(cfg.APIKey)
 		id := strings.TrimSpace(args[0])
-		det, err := client.GetIssueDetails(id)
+        comments, _ := cmd.Flags().GetInt("comments")
+        var det *api.IssueDetails
+        var err error
+        if comments > 0 {
+            det, err = client.GetIssueDetailsWithComments(id, comments)
+        } else {
+            det, err = client.GetIssueDetails(id)
+        }
 		if err != nil { return err }
 		if det == nil { return fmt.Errorf("issue %s not found", id) }
 		p := printer(cmd)
@@ -31,7 +38,11 @@ var issuesViewCmd = &cobra.Command{
 		if det.Assignee != nil { assignee = det.Assignee.Name }
 		project := ""
 		if det.Project != nil { project = det.Project.Name }
-		fmt.Printf("%s %s\nState: %s\nAssignee: %s\nProject: %s\nURL: %s\n\n%s\n", det.Identifier, det.Title, det.StateName, assignee, project, det.URL, strings.TrimSpace(det.Description))
+        fmt.Printf("%s %s\nState: %s\nAssignee: %s\nProject: %s\nURL: %s\n\n%s\n", det.Identifier, det.Title, det.StateName, assignee, project, det.URL, strings.TrimSpace(det.Description))
+        if comments > 0 && len(det.Comments) > 0 {
+            fmt.Println("\nComments:")
+            for _, c := range det.Comments { fmt.Printf("- %s\n", strings.TrimSpace(c.Body)) }
+        }
 		return nil
 	},
 }
@@ -141,4 +152,5 @@ func init() {
 	issuesCreateAdvCmd.Flags().String("assignee", "", "Assignee name or id")
 	issuesCreateAdvCmd.Flags().String("label", "", "Label name")
 	issuesCreateAdvCmd.Flags().Int("priority", 0, "Priority (1 highest .. 4 lowest)")
+    issuesViewCmd.Flags().Int("comments", 0, "Include up to N comments")
 }
