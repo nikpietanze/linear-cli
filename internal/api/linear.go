@@ -340,29 +340,26 @@ type Label struct {
 
 // ListProjects returns up to 100 accessible projects
 func (c *Client) ListProjects() ([]Project, error) {
-    const q = `query { projects(first: 100) { nodes { id name state team { id } } } }`
+    // Minimal fields to reduce required permissions
+    const q = `query { projects(first: 100) { nodes { id name } } }`
     var resp struct {
         Projects struct {
             Nodes []struct {
                 ID    string `json:"id"`
                 Name  string `json:"name"`
-                State string `json:"state"`
-                Team  struct{ ID string `json:"id"` } `json:"team"`
             } `json:"nodes"`
         } `json:"projects"`
     }
     if err := c.do(q, nil, &resp); err != nil { return nil, err }
     out := make([]Project, 0, len(resp.Projects.Nodes))
-    for _, n := range resp.Projects.Nodes {
-        out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, TeamID: n.Team.ID})
-    }
+    for _, n := range resp.Projects.Nodes { out = append(out, Project{ID: n.ID, Name: n.Name}) }
     return out, nil
 }
 
 // ResolveProject resolves by id (exact) or by name (exact, single)
 func (c *Client) ResolveProject(input string) (*Project, error) {
     {
-        const q = `query($id:String!){ project(id:$id){ id name state team{ id } } }`
+    const q = `query($id:ID!){ project(id:$id){ id name state team{ id } } }`
         var resp struct { Project *struct{ ID, Name, State string; Team struct{ ID string `json:"id"` } `json:"team"` } `json:"project"` }
         if err := c.do(q, map[string]interface{}{"id": input}, &resp); err == nil && resp.Project != nil {
             p := resp.Project
@@ -381,7 +378,7 @@ func (c *Client) ResolveProject(input string) (*Project, error) {
 // ResolveUser resolves a user by id, or by name/email (single match)
 func (c *Client) ResolveUser(input string) (*User, error) {
     {
-        const q = `query($id:String!){ user(id:$id){ id name email } }`
+    const q = `query($id:ID!){ user(id:$id){ id name email } }`
         var resp struct { User *User `json:"user"` }
         if err := c.do(q, map[string]interface{}{"id": input}, &resp); err == nil && resp.User != nil { return resp.User, nil }
     }
@@ -420,7 +417,7 @@ type IssueDetails struct {
 
 // GetIssueDetails returns a full issue by id
 func (c *Client) GetIssueDetails(id string) (*IssueDetails, error) {
-    const q = `query($id:String!){ issue(id:$id){ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state team{ id } } } }`
+    const q = `query($id:ID!){ issue(id:$id){ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state team{ id } } } }`
     var resp struct { Issue *struct { ID, Identifier, Title, Description, URL string; State struct{ Name string `json:"name"` } `json:"state"`; Assignee *User `json:"assignee"`; Labels struct{ Nodes []Label `json:"nodes"` } `json:"labels"`; Project *struct{ ID, Name, State string; Team struct{ ID string `json:"id"` } `json:"team"` } `json:"project"` } `json:"issue"` }
     if err := c.do(q, map[string]interface{}{"id": id}, &resp); err != nil { return nil, err }
     if resp.Issue == nil { return nil, nil }

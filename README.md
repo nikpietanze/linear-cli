@@ -45,11 +45,11 @@ go build -o ./dist/linear-cli .
 
 ## Authentication
 
-You can pass your API key via flag, environment, or interactive prompt.
+You can pass your API key via interactive login (recommended), environment, or a one-off flag.
 
-- Flag: `linear-cli auth login --token <YOUR_TOKEN>`
+- Recommended: run `linear-cli auth login` and paste when prompted. This stores the key in `~/.config/linear/config.toml` (0600) for use system-wide.
 - Environment: set `LINEAR_API_KEY=<YOUR_TOKEN>` in your shell profile
-- Prompt: run `linear-cli auth login` and paste when prompted
+- One-off flag: `linear-cli auth login --token <YOUR_TOKEN>`
 
 Check status:
 
@@ -95,7 +95,7 @@ Add a comment:
 linear-cli comment create --key ENG-123 --body "Ship it!"
 ```
 
-List projects:
+List projects (requires token with read access to projects/organization):
 
 ```bash
 linear-cli projects list
