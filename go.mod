@@ -6,6 +6,7 @@ toolchain go1.24.2
 
 require (
 	github.com/BurntSushi/toml v1.4.0
+	github.com/joho/godotenv v1.5.1
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/term v0.34.0
 )

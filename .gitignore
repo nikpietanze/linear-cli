@@ -15,3 +15,8 @@
 
 # macOS
 .DS_Store
+
+# Local env files
+.env
+.env.local
+.env.*.local
