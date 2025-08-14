@@ -106,7 +106,7 @@ var issuesGetCmd = &cobra.Command{
 			fmt.Println("Issue not found")
 			return nil
 		}
-		fmt.Printf("%s %s\nState: %s\nTeam: %s\nURL: %s\n\n%s\n", issue.Identifier, issue.Title, issue.StateName, issue.TeamKey, issue.URL, strings.TrimSpace(issue.Description))
+        fmt.Printf("%s %s\nState: %s\nURL: %s\n\n%s\n", issue.Identifier, issue.Title, issue.StateName, issue.URL, strings.TrimSpace(issue.Description))
 		return nil
 	},
 }

@@ -47,43 +47,93 @@ var issuesViewCmd = &cobra.Command{
 	},
 }
 
-var issuesListAdvCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List issues with optional filters",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		cfg, _ := config.Load()
-		if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
-		client := api.NewClient(cfg.APIKey)
-		limit, _ := cmd.Flags().GetInt("limit")
-		project, _ := cmd.Flags().GetString("project")
-		assignee, _ := cmd.Flags().GetString("assignee")
-		state, _ := cmd.Flags().GetString("state")
+func runIssuesListWithArgs(cmd *cobra.Command, statePreset string) error {
+    cfg, _ := config.Load()
+    if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
+    client := api.NewClient(cfg.APIKey)
+    limit, _ := cmd.Flags().GetInt("limit")
+    project, _ := cmd.Flags().GetString("project")
+    assignee, _ := cmd.Flags().GetString("assignee")
+    stateFlag, _ := cmd.Flags().GetString("state")
+    // Convenience boolean flags
+    todo, _ := cmd.Flags().GetBool("todo")
+    doing, _ := cmd.Flags().GetBool("doing")
+    done, _ := cmd.Flags().GetBool("done")
 
-		var projectID string
-		if project != "" {
-			pr, err := client.ResolveProject(project)
-			if err != nil { return err }
-			if pr == nil { return fmt.Errorf("project '%s' not found", project) }
-			projectID = pr.ID
-		}
-		var assigneeID string
-		if assignee != "" {
-			u, err := client.ResolveUser(assignee)
-			if err != nil { return err }
-			if u == nil { return fmt.Errorf("assignee '%s' not found", assignee) }
-			assigneeID = u.ID
-		}
-		items, err := client.ListIssuesFiltered(api.IssueListFilter{ProjectID: projectID, AssigneeID: assigneeID, StateName: state, Limit: limit})
-		if err != nil { return err }
-		p := printer(cmd)
-		if p.JSONEnabled() { return p.PrintJSON(items) }
-		head := []string{"Key", "State", "Title"}
-		rows := make([][]string, 0, len(items))
-		for _, it := range items {
-			rows = append(rows, []string{it.Identifier, it.StateName, it.Title})
-		}
-		return p.Table(head, rows)
-	},
+    // Determine effective state
+    var state string
+    if statePreset != "" { state = statePreset }
+    count := 0
+    if todo { state = "Todo"; count++ }
+    if doing { state = "In Progress"; count++ }
+    if done { state = "Done"; count++ }
+    if count > 1 { return errors.New("use only one of --todo/--doing/--done") }
+    if state == "" { state = normalizeState(stateFlag) }
+
+    var projectID string
+    if project != "" {
+        pr, err := client.ResolveProject(project)
+        if err != nil { return err }
+        if pr == nil { return fmt.Errorf("project '%s' not found", project) }
+        projectID = pr.ID
+    }
+    var assigneeID string
+    if assignee != "" {
+        u, err := client.ResolveUser(assignee)
+        if err != nil { return err }
+        if u == nil { return fmt.Errorf("assignee '%s' not found", assignee) }
+        assigneeID = u.ID
+    }
+    items, err := client.ListIssuesFiltered(api.IssueListFilter{ProjectID: projectID, AssigneeID: assigneeID, StateName: state, Limit: limit})
+    if err != nil { return err }
+    p := printer(cmd)
+    if p.JSONEnabled() { return p.PrintJSON(items) }
+    head := []string{"Key", "State", "Title"}
+    rows := make([][]string, 0, len(items))
+    for _, it := range items {
+        rows = append(rows, []string{it.Identifier, it.StateName, it.Title})
+    }
+    return p.Table(head, rows)
+}
+
+func normalizeState(s string) string {
+    if s == "" { return "" }
+    ls := strings.ToLower(strings.TrimSpace(s))
+    switch ls {
+    case "todo", "to-do":
+        return "Todo"
+    case "doing", "inprogress", "in-progress", "in progress":
+        return "In Progress"
+    case "done", "complete", "completed":
+        return "Done"
+    default:
+        // return original to allow custom states
+        return s
+    }
+}
+
+var issuesListAdvCmd = &cobra.Command{
+    Use:   "list",
+    Short: "List issues with optional filters",
+    RunE: func(cmd *cobra.Command, args []string) error { return runIssuesListWithArgs(cmd, "") },
+}
+
+var issuesTodoCmd = &cobra.Command{
+    Use:   "todo",
+    Short: "List Todo issues",
+    RunE: func(cmd *cobra.Command, args []string) error { return runIssuesListWithArgs(cmd, "Todo") },
+}
+
+var issuesDoingCmd = &cobra.Command{
+    Use:   "doing",
+    Short: "List In Progress issues",
+    RunE: func(cmd *cobra.Command, args []string) error { return runIssuesListWithArgs(cmd, "In Progress") },
+}
+
+var issuesDoneCmd = &cobra.Command{
+    Use:   "done",
+    Short: "List Done issues",
+    RunE: func(cmd *cobra.Command, args []string) error { return runIssuesListWithArgs(cmd, "Done") },
 }
 
 var issuesCreateAdvCmd = &cobra.Command{
@@ -140,11 +190,24 @@ func init() {
 	issuesCmd.AddCommand(issuesListAdvCmd)
 	issuesCmd.AddCommand(issuesViewCmd)
 	issuesCmd.AddCommand(issuesCreateAdvCmd)
+    issuesCmd.AddCommand(issuesTodoCmd)
+    issuesCmd.AddCommand(issuesDoingCmd)
+    issuesCmd.AddCommand(issuesDoneCmd)
 
-	issuesListAdvCmd.Flags().Int("limit", 10, "Maximum number of issues to list")
-	issuesListAdvCmd.Flags().String("project", "", "Filter by project name or id")
-	issuesListAdvCmd.Flags().String("assignee", "", "Filter by assignee name or id")
-	issuesListAdvCmd.Flags().String("state", "", "Filter by state name")
+    issuesListAdvCmd.Flags().Int("limit", 10, "Maximum number of issues to list")
+    issuesListAdvCmd.Flags().String("project", "", "Filter by project name or id")
+    issuesListAdvCmd.Flags().String("assignee", "", "Filter by assignee name or id")
+    issuesListAdvCmd.Flags().StringP("state", "s", "", "Filter by state (e.g. Todo, In Progress, Done)")
+    issuesListAdvCmd.Flags().Bool("todo", false, "Shortcut for --state 'Todo'")
+    issuesListAdvCmd.Flags().Bool("doing", false, "Shortcut for --state 'In Progress'")
+    issuesListAdvCmd.Flags().Bool("done", false, "Shortcut for --state 'Done'")
+
+    // Reuse common flags for state subcommands
+    for _, c := range []*cobra.Command{issuesTodoCmd, issuesDoingCmd, issuesDoneCmd} {
+        c.Flags().Int("limit", 10, "Maximum number of issues to list")
+        c.Flags().String("project", "", "Filter by project name or id")
+        c.Flags().String("assignee", "", "Filter by assignee name or id")
+    }
 
 	issuesCreateAdvCmd.Flags().String("title", "", "Issue title")
 	issuesCreateAdvCmd.Flags().String("description", "", "Issue description")
