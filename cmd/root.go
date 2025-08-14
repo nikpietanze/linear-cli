@@ -9,6 +9,12 @@ import (
     "github.com/spf13/cobra"
 )
 
+// These are injected at build time via -ldflags. Defaults are for dev builds.
+var (
+    buildVersion = "dev"
+    buildCommit  = ""
+)
+
 var rootCmd = &cobra.Command{
 	Use:   "linear-cli",
 	Short: "A fast CLI to work with Linear issues",
@@ -35,6 +41,9 @@ func init() {
     // Global flags
     rootCmd.PersistentFlags().BoolP("json", "j", false, "Output JSON for scripting")
     // Allow tests to inject a custom API endpoint via env; document via hidden flag if needed later
+
+    // Provide a version flag for packaging (Homebrew requires a simple version output)
+    rootCmd.Version = buildVersion
 }
 
 // helper to access a shared output.Printer from commands
