@@ -1,0 +1,42 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goos: [linux, darwin]
+        goarch: [amd64, arm64]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+      - name: Prepare
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME}" >> $GITHUB_ENV
+          mkdir -p dist
+      - name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          OUT="linear-cli"
+          if [ "${{ matrix.goos }}" = "windows" ]; then OUT="linear-cli.exe"; fi
+          go build -ldflags="-s -w" -o "$OUT" .
+          ARCHIVE="linear-cli_${{ env.VERSION }}_${{ matrix.goos }}_${{ matrix.goarch }}.tar.gz"
+          tar -czf "dist/$ARCHIVE" "$OUT" LICENSE README.md
+      - name: Upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
