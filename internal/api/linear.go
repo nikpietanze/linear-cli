@@ -248,7 +248,7 @@ func (c *Client) ListIssues(limit int, teamID string) ([]Issue, error) {
 }
 
 func (c *Client) IssueByID(id string) (*Issue, error) {
-    const q = `query($id:ID!){ issue(id:$id){ id identifier title description url state{ name } } }`
+    const q = `query($id:String!){ issue(id:$id){ id identifier title description url state{ name } } }`
 	var resp struct {
 		Issue *struct {
 			ID         string `json:"id"`
@@ -270,26 +270,30 @@ func (c *Client) IssueByID(id string) (*Issue, error) {
 }
 
 func (c *Client) IssueByKey(teamID string, number int) (*Issue, error) {
-    const q = `query($teamId:String!,$identifier:Int!){ issueByIdentifier(teamId:$teamId, identifier:$identifier){ id identifier title description url state{ name } } }`
-	var resp struct {
-		IssueByIdentifier *struct {
-			ID         string `json:"id"`
-			Identifier string `json:"identifier"`
-			Title      string `json:"title"`
-			Description string `json:"description"`
-			URL        string `json:"url"`
-			State      struct{ Name string `json:"name"` } `json:"state"`
-		} `json:"issueByIdentifier"`
-	}
-	if err := c.do(q, map[string]interface{}{"teamId": teamID, "identifier": number}, &resp); err != nil {
-		return nil, err
-	}
-	if resp.IssueByIdentifier == nil {
-		return nil, nil
-	}
-	is := resp.IssueByIdentifier
-    return &Issue{ID: is.ID, Identifier: is.Identifier, Title: is.Title, Description: is.Description, URL: is.URL, StateName: is.State.Name}, nil
+    const q = `query($teamId:String!,$number:Float!){
+  issues(first:1, filter:{ and:[ { team: { id: { eq: $teamId } } }, { number: { eq: $number } } ] }){
+    nodes{ id identifier title description url state{ name } }
+  }
+}`
+    var resp struct {
+        Issues struct{
+            Nodes []struct{
+                ID          string `json:"id"`
+                Identifier  string `json:"identifier"`
+                Title       string `json:"title"`
+                Description string `json:"description"`
+                URL         string `json:"url"`
+                State       struct{ Name string `json:"name"` } `json:"state"`
+            } `json:"nodes"`
+        } `json:"issues"`
+    }
+    if err := c.do(q, map[string]interface{}{"teamId": teamID, "number": float64(number)}, &resp); err != nil { return nil, err }
+    if len(resp.Issues.Nodes) == 0 { return nil, nil }
+    n := resp.Issues.Nodes[0]
+    return &Issue{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, StateName: n.State.Name}, nil
 }
+
+// (Note) Linear's schema expects number as Float in filters
 
 func (c *Client) CreateIssue(teamID, title, description string) (*Issue, error) {
     const q = `mutation($input: IssueCreateInput!){ issueCreate(input:$input){ success issue{ id identifier title description url state{ name } } } }`
@@ -384,7 +388,7 @@ func (c *Client) ListProjectsDetailed() ([]Project, error) {
 // ResolveProject resolves by id (exact) or by name (exact, single)
 func (c *Client) ResolveProject(input string) (*Project, error) {
     {
-        const q = `query($id:ID!){ project(id:$id){ id name state } }`
+        const q = `query($id:String!){ project(id:$id){ id name state } }`
         var resp struct { Project *struct{ ID, Name, State string } `json:"project"` }
         if err := c.do(q, map[string]interface{}{"id": input}, &resp); err == nil && resp.Project != nil {
             p := resp.Project
@@ -403,7 +407,7 @@ func (c *Client) ResolveProject(input string) (*Project, error) {
 // ResolveUser resolves a user by id, or by name/email (single match)
 func (c *Client) ResolveUser(input string) (*User, error) {
     {
-    const q = `query($id:ID!){ user(id:$id){ id name email } }`
+        const q = `query($id:String!){ user(id:$id){ id name email } }`
         var resp struct { User *User `json:"user"` }
         if err := c.do(q, map[string]interface{}{"id": input}, &resp); err == nil && resp.User != nil { return resp.User, nil }
     }
@@ -443,7 +447,7 @@ type IssueDetails struct {
 
 // GetIssueDetails returns a full issue by id
 func (c *Client) GetIssueDetails(id string) (*IssueDetails, error) {
-    const q = `query($id:ID!){ issue(id:$id){ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state } } }`
+    const q = `query($id:String!){ issue(id:$id){ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state } } }`
     var resp struct { Issue *struct { ID, Identifier, Title, Description, URL string; State struct{ Name string `json:"name"` } `json:"state"`; Assignee *User `json:"assignee"`; Labels struct{ Nodes []Label `json:"nodes"` } `json:"labels"`; Project *struct{ ID, Name, State string } `json:"project"` } `json:"issue"` }
     if err := c.do(q, map[string]interface{}{"id": id}, &resp); err != nil { return nil, err }
     if resp.Issue == nil { return nil, nil }
@@ -571,7 +575,7 @@ func (c *Client) CreateComment(issueID, body string) (*CommentResult, error) {
 // IssueComments fetches up to limit comments for an issue (minimal fields for compatibility)
 func (c *Client) IssueComments(issueID string, limit int) ([]Comment, error) {
     if limit <= 0 { limit = 20 }
-    const q = `query($id:ID!,$first:Int!){ issue(id:$id){ comments(first:$first){ nodes{ id body } } } }`
+    const q = `query($id:String!,$first:Int!){ issue(id:$id){ comments(first:$first){ nodes{ id body } } } }`
     var resp struct {
         Issue *struct {
             Comments struct{
