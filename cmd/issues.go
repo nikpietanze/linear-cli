@@ -151,13 +151,13 @@ func init() {
 	issuesCmd.AddCommand(issuesGetCmd)
 	issuesCmd.AddCommand(issuesCreateCmd)
 
-	issuesListCmd.Flags().Int("limit", 10, "Maximum number of issues to list")
-	issuesListCmd.Flags().String("team", "", "Filter by team key (e.g. ENG)")
+    issuesListCmd.Flags().IntP("limit", "n", 10, "Maximum number of issues to list")
+    issuesListCmd.Flags().StringP("team", "t", "", "Filter by team key (e.g. ENG)")
 
-	issuesGetCmd.Flags().String("id", "", "Issue ID")
-	issuesGetCmd.Flags().String("key", "", "Issue key like TEAM-123")
+    issuesGetCmd.Flags().StringP("id", "i", "", "Issue ID")
+    issuesGetCmd.Flags().StringP("key", "k", "", "Issue key like TEAM-123")
 
-	issuesCreateCmd.Flags().String("team", "", "Team key (e.g. ENG)")
-	issuesCreateCmd.Flags().String("title", "", "Issue title")
-	issuesCreateCmd.Flags().String("description", "", "Issue description")
+    issuesCreateCmd.Flags().StringP("team", "t", "", "Team key (e.g. ENG)")
+    issuesCreateCmd.Flags().StringP("title", "T", "", "Issue title")
+    issuesCreateCmd.Flags().StringP("description", "d", "", "Issue description")
 }

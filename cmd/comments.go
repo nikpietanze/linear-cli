@@ -64,7 +64,7 @@ var commentCreateCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(commentCmd)
 	commentCmd.AddCommand(commentCreateCmd)
-	commentCreateCmd.Flags().String("id", "", "Issue ID")
-	commentCreateCmd.Flags().String("key", "", "Issue key like TEAM-123")
-	commentCreateCmd.Flags().String("body", "", "Comment body (markdown supported)")
+    commentCreateCmd.Flags().StringP("id", "i", "", "Issue ID")
+    commentCreateCmd.Flags().StringP("key", "k", "", "Issue key like TEAM-123")
+    commentCreateCmd.Flags().StringP("body", "b", "", "Comment body (markdown supported)")
 }

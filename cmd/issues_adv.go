@@ -30,6 +30,7 @@ var issuesViewCmd = &cobra.Command{
         // Accept either an issue ID or a key like TEAM-123
         id := raw
         if m := regexp.MustCompile(`^([A-Z]+)-(\d+)$`).FindStringSubmatch(strings.ToUpper(raw)); len(m) == 3 {
+            // Resolve by team+number
             teamKey := m[1]
             num, _ := strconv.Atoi(m[2])
             team, errT := client.TeamByKey(teamKey)

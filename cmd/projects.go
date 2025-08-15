@@ -55,5 +55,5 @@ var projectsListCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(projectsCmd)
 	projectsCmd.AddCommand(projectsListCmd)
-    projectsListCmd.Flags().Bool("details", false, "Show additional fields (state, url)")
+    projectsListCmd.Flags().BoolP("details", "d", false, "Show additional fields (state, url)")
 }

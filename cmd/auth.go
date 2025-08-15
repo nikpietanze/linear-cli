@@ -129,5 +129,5 @@ func init() {
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authStatusCmd)
     authCmd.AddCommand(authTestCmd)
-	authLoginCmd.Flags().String("token", "", "Linear API key (or set LINEAR_API_KEY)")
+    authLoginCmd.Flags().StringP("token", "t", "", "Linear API key (or set LINEAR_API_KEY)")
 }
