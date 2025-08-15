@@ -18,8 +18,8 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "linear-cli",
-	Short: "A fast CLI to work with Linear issues",
+    Use:   "linear-cli",
+    Short: "A fast CLI to work with Linear issues",
     Long:  "linear-cli is a fast, plug-and-play CLI to authenticate with Linear and create or read issues via their GraphQL API.",
     Example: `  # Authenticate (stored in ~/.config/linear/config.toml)
   linear-cli auth login
@@ -33,8 +33,8 @@ var rootCmd = &cobra.Command{
   # View an issue by key or ID
   linear-cli issues view ENG-123
 
-  # Create an issue with label and priority
-  linear-cli issues create --title "Bug" --label bug --priority 2`,
+  # Create an issue with team key and bug template
+  linear-cli issues create --title "Bug" --team ENG --template bug --label bug --priority 2`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {

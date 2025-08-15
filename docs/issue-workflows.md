@@ -2,36 +2,25 @@
 
 This document visualizes the primary flows for creating issues with `linear-cli`.
 
-## High-level create flow
+## High-level create flow (team-only, interactive by default)
 ```mermaid
 flowchart TD
-  A[Start: linear-cli issues create] --> B{Template input?}
-  B -- --template-id --> TID[Server-side from templateId]
-  B -- --template --> C{Source}
-  B -- no template --> D[Use --description as provided]
-
-  C -- api --> C1[Fetch via Linear API\nby id or by name+team]
-  C -- remote --> C2[Fetch https URL\nor <base>/<name>.md]
-  C -- local --> C3[Read file path or\nresolve from search dirs]
-
-  C1 --> E[Template content]
-  C2 --> E
-  C3 --> E
-
-  E --> F{Interactive?}
-  F -- yes --> G[Prompt for missing {{KEY}}\nusing optional prompt text]
-  F -- no --> H[Use provided vars only]
-  G --> I[fillTemplate]
-  H --> I[fillTemplate]
-
-  I --> J{Preview auto?}
-  J -- yes --> K[Show preview\n(--yes continues, else exit)]
-  J -- no --> L[Proceed]
-
-  TID --> M[issueCreate(input:{teamId,templateId,title})]
-  L --> N[issueCreate(input:{teamId/projectId,title,description,...})]
-  M --> O[Created: identifier + URL]
-  N --> O
+  A[Start: linear-cli issues create --team ENG] --> B{Interactive}
+  B -- default:on --> C{Type (Feature/Bug/Spike)}
+  C --> D{Template available?\n(API→Remote→Local)}
+  D -- yes --> E[Load + fillTemplate]
+  D -- no --> F[Prompt multiline description]
+  E --> G{Preview auto?}
+  F --> G
+  G -- yes --> H[Preview + confirm]
+  G -- no --> I[Continue]
+  I --> J[Pick Priority (1-4)]
+  J --> K[Pick State (Backlog/Todo/etc from API)]
+  K --> L[Pick Assignee (incl. (me))]
+  L --> M[Pick Project (team projects)]
+  M --> N[Optional: pick labels (multi)]
+  N --> O[Create issue]
+  O --> P[Created: identifier + URL]
 ```
 
 ## Interactive prompting details

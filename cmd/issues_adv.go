@@ -8,6 +8,7 @@ import (
     "io"
     "net/http"
     "os"
+    "os/exec"
     "path/filepath"
     "regexp"
     "strconv"
@@ -295,9 +296,9 @@ var issuesDoneCmd = &cobra.Command{
 }
 
 var issuesCreateAdvCmd = &cobra.Command{
-    Use:   "create --title <title> (--project <name|id> | --team <key>) [flags]",
+    Use:   "create --team <key> [flags]",
     Short: "Create a new issue",
-    Long: `Create a new issue in a project or team. Provide either --project (name or id) or --team (key like ENG).
+    Long: `Create a new issue. Provide --team (key like ENG). Other fields are prompted interactively by default.
 
 Template-driven creation
  - Use --template <name|path|url> to load a markdown template. Named templates resolve from local dirs or a remote base URL
@@ -356,17 +357,24 @@ Examples of placeholders
 		assignee, _ := cmd.Flags().GetString("assignee")
 		label, _ := cmd.Flags().GetString("label")
 		priority, _ := cmd.Flags().GetInt("priority")
-		if title == "" { return errors.New("--title is required") }
+        // Title can be gathered interactively if not provided
         // Compute default behavior: interactive by default with templates unless explicitly disabled.
         // If prefill vars are provided, default to preview unless explicitly disabled.
         varsProvided := len(varsKVs) > 0 || strings.TrimSpace(varsFile) != ""
+        // Interactive is the default unless explicitly disabled
         interactive := interactiveFlag
-        if strings.TrimSpace(templateName) != "" && strings.TrimSpace(description) == "" && !noInteractive && !cmd.Flags().Changed("interactive") {
+        if !noInteractive && !cmd.Flags().Changed("interactive") {
             interactive = true
         }
         preview := previewFlag
         if varsProvided && !noPreview && !cmd.Flags().Changed("preview") {
             preview = true
+        }
+
+        // If user requested interactive but provided no template or description, offer to pick a template
+        if !interactive && strings.TrimSpace(templateName) == "" && strings.TrimSpace(description) == "" {
+            tmpl, pickErr := interactivePickTemplate(cmd, client, teamKey)
+            if pickErr == nil && strings.TrimSpace(tmpl) != "" { templateName = tmpl }
         }
 
         // Fast path: server-side creation from API template id
@@ -418,6 +426,11 @@ Examples of placeholders
             description, err = fillTemplate(tplContent, vars, interactive, failOnMissing)
             if err != nil { return err }
         }
+
+        // As a final guard in interactive mode, if description is still empty, prompt for a multiline description
+        if interactive && strings.TrimSpace(description) == "" {
+            description = promptMultilineDescription()
+        }
         var projectID string
         var teamID string
         if project != "" {
@@ -433,9 +446,7 @@ Examples of placeholders
             if t == nil { return fmt.Errorf("team with key %s not found", teamKey) }
             teamID = t.ID
         }
-        if projectID == "" && teamID == "" {
-            return errors.New("provide --project or --team")
-        }
+        if teamID == "" { return errors.New("--team is required") }
 		var assigneeID string
 		if assignee != "" {
 			u, err := client.ResolveUser(assignee)
@@ -452,7 +463,7 @@ Examples of placeholders
 		}
         var prioPtr *int
         if cmd.Flags().Changed("priority") { prioPtr = &priority }
-        if preview {
+        if preview && strings.TrimSpace(description) != "" {
             // Show the rendered description and exit
             p := printer(cmd)
             if p.JSONEnabled() {
@@ -472,7 +483,130 @@ Examples of placeholders
                 return nil
             }
         }
-        created, err := client.CreateIssueAdvanced(api.IssueCreateInput{ProjectID: projectID, TeamID: teamID, Title: title, Description: description, AssigneeID: assigneeID, LabelIDs: labelIDs, Priority: prioPtr})
+        // If interactive and still missing, walk through all fields
+        if interactive {
+            // Title
+            if strings.TrimSpace(title) == "" { title = promptLine("Title: ") }
+            // Kind -> optional auto-label mapping
+            kind := promptChoiceStrict("Issue type", []string{"Feature", "Bug", "Spike"}, false)
+            // Attempt to auto-load template by kind if no description/template provided
+            if strings.TrimSpace(description) == "" && strings.TrimSpace(templateName) == "" {
+                preferAPI := client.SupportsIssueTemplates()
+                if tplContent, ok := autoLoadTemplateByKind(kind, cmd, client, teamID); ok {
+                    if prefix, body := parseTitlePrefixAndStrip(tplContent); prefix != "" {
+                        if !strings.HasPrefix(strings.TrimSpace(title), prefix) { title = strings.TrimSpace(prefix + " " + title) }
+                        tplContent = body
+                    }
+                    vars, _ := gatherVars(varsKVs, varsFile)
+                    if rendered, err := fillTemplate(tplContent, vars, true, false); err == nil { description = rendered }
+                } else {
+                    // Fallback: allow user to pick a template interactively
+                    if preferAPI { _ = cmd.Flags().Set("templates-source", "api") }
+                    if tmpl, err := interactivePickTemplate(cmd, client, teamKey); err == nil && strings.TrimSpace(tmpl) != "" {
+                        templatesDir, _ := cmd.Flags().GetString("templates-dir")
+                        baseOverride, _ := cmd.Flags().GetString("templates-base-url")
+                        if raw, err := loadTemplateContent(tmpl, templatesDir, baseOverride); err == nil {
+                            if prefix, body := parseTitlePrefixAndStrip(raw); prefix != "" {
+                                if !strings.HasPrefix(strings.TrimSpace(title), prefix) { title = strings.TrimSpace(prefix + " " + title) }
+                                raw = body
+                            }
+                            vars, _ := gatherVars(varsKVs, varsFile)
+                            if rendered, err := fillTemplate(raw, vars, true, false); err == nil { description = rendered }
+                        }
+                    }
+                }
+            }
+            // Offer to add a label matching the kind if available
+            if strings.TrimSpace(kind) != "" {
+                if labels, err := client.ListIssueLabels(200); err == nil && len(labels) > 0 {
+                    var kindLabelID string
+                    for _, lb := range labels { if strings.EqualFold(lb.Name, kind) { kindLabelID = lb.ID; break } }
+                    if kindLabelID != "" { labelIDs = append(labelIDs, kindLabelID) }
+                }
+            }
+            // Priority
+            if prioPtr == nil {
+                prioStr := promptChoice("Priority", []string{"1", "2", "3", "4"})
+                if v, err := strconv.Atoi(prioStr); err == nil { prioPtr = &v }
+            }
+            // Assignee from team members
+            if assigneeID == "" && teamID != "" {
+                members, _ := client.TeamMembers(teamID)
+                if len(members) > 0 {
+                    // Build options including (me)
+                    var me *api.Viewer
+                    if v, err := client.Viewer(); err == nil { me = v }
+                    opts := []string{"(none)"}
+                    idxByName := map[string]int{}
+                    if me != nil { opts = append(opts, fmt.Sprintf("(me) %s", me.Name)) }
+                    for i, u := range members { opts = append(opts, u.Name); idxByName[u.Name] = i }
+                    pick := promptChoiceStrict("Assignee", opts, true)
+                    if pick == "(none)" {
+                        // leave empty
+                    } else if me != nil && (strings.EqualFold(pick, "(me)") || strings.Contains(pick, me.Name)) {
+                        assigneeID = me.ID
+                    } else {
+                        if i, ok := idxByName[pick]; ok { assigneeID = members[i].ID }
+                    }
+                }
+            }
+            // Project picker (from API, filtered by team)
+            if projectID == "" {
+                var projects []api.Project
+                if teamID != "" { projects, _ = client.ListProjectsByTeam(teamID, 200) }
+                if len(projects) == 0 { projects, _ = client.ListProjectsAll(200) }
+                if len(projects) > 0 {
+                    opts := make([]string, len(projects)+1)
+                    opts[0] = "(none)"
+                    for i, p := range projects { opts[i+1] = p.Name }
+                    pick := promptChoice("Project", opts)
+                    if pick != "(none)" {
+                        for i, p := range projects { if p.Name == pick { projectID = projects[i].ID; break } }
+                    }
+                } else {
+                    // fallback text entry
+                    pName := strings.TrimSpace(promptLine("Project (leave blank for none): "))
+                    if pName != "" { if pr, err := client.ResolveProject(pName); err == nil && pr != nil { projectID = pr.ID } }
+                }
+            }
+            // Labels multi-select
+            if labels, err := client.ListIssueLabels(200); err == nil && len(labels) > 0 {
+                names := make([]string, len(labels))
+                for i, lb := range labels { names[i] = lb.Name }
+                picks := promptMultiSelect("Labels (comma-separated numbers or names, blank to skip)", names)
+                if len(picks) > 0 {
+                    // merge unique
+                    existing := map[string]struct{}{}
+                    for _, id := range labelIDs { existing[id] = struct{}{} }
+                    for _, pick := range picks {
+                        // match by name to id
+                        for _, lb := range labels { if strings.EqualFold(lb.Name, pick) { if _, ok := existing[lb.ID]; !ok { labelIDs = append(labelIDs, lb.ID); existing[lb.ID] = struct{}{} } } }
+                    }
+                }
+            }
+
+            // Ensure description
+            if strings.TrimSpace(description) == "" { description = promptMultilineDescription() }
+            // Optional editor for final tweaks
+            if promptYesNo("Open in editor to finalize description? (y/N): ", false) {
+                if edited, err := openInEditor(description); err == nil { description = edited }
+            }
+        }
+
+        // Final: create (include state if chosen earlier)
+        // Re-prompt state if interactive and not set
+        var chosenStateID string
+        if interactive {
+            states, _ := client.TeamStates(teamID)
+            if len(states) > 0 {
+                opts := make([]string, len(states))
+                idByName := map[string]string{}
+                for i, s := range states { opts[i] = s.Name; idByName[s.Name] = s.ID }
+                pick := promptChoice("State", opts)
+                if id, ok := idByName[pick]; ok { chosenStateID = id }
+            }
+        }
+        created, err := client.CreateIssueAdvanced(api.IssueCreateInput{ProjectID: projectID, TeamID: teamID, StateID: chosenStateID, Title: title, Description: description, AssigneeID: assigneeID, LabelIDs: labelIDs, Priority: prioPtr})
 		if err != nil { return err }
 		p := printer(cmd)
 		if p.JSONEnabled() { return p.PrintJSON(created) }
@@ -510,11 +644,11 @@ func init() {
         c.Flags().String("assignee", "", "Filter by assignee name or id")
     }
 
-    issuesCreateAdvCmd.Flags().String("title", "", "Issue title")
+    issuesCreateAdvCmd.Flags().String("title", "", "Issue title (prompted if not provided)")
     issuesCreateAdvCmd.Flags().String("description", "", "Issue description")
     issuesCreateAdvCmd.Flags().String("template", "", "Template name (e.g. bug, feature, spike) or file path")
     issuesCreateAdvCmd.Flags().String("template-id", "", "Linear API template id to use for server-side creation (requires --team)")
-    issuesCreateAdvCmd.Flags().BoolP("interactive", "i", false, "Interactive walkthrough to fill template placeholders (default: on when using --template and no --description)")
+    issuesCreateAdvCmd.Flags().BoolP("interactive", "i", false, "Interactive walkthrough (default: on; disable with --no-interactive)")
     issuesCreateAdvCmd.Flags().Bool("no-interactive", false, "Disable interactive walkthrough")
     issuesCreateAdvCmd.Flags().Bool("preview", false, "Preview the rendered issue and exit without creating (default: on when --var/--vars-file provided)")
     issuesCreateAdvCmd.Flags().Bool("no-preview", false, "Disable automatic preview when vars are provided")
@@ -617,6 +751,193 @@ func expandUserPath(p string) string {
         }
     }
     return p
+}
+
+// interactivePickTemplate offers the user a list of available templates (from auto/remote/local/API based on flags/env) and returns the chosen name.
+func interactivePickTemplate(cmd *cobra.Command, client *api.Client, teamKey string) (string, error) {
+    // Determine source preferences
+    source, _ := cmd.Flags().GetString("templates-source")
+    templatesDir, _ := cmd.Flags().GetString("templates-dir")
+    baseOverride, _ := cmd.Flags().GetString("templates-base-url")
+
+    // Gather names
+    names := []string{}
+    if source == "api" {
+        if strings.TrimSpace(teamKey) == "" { return "", errors.New("--team is required with --templates-source=api") }
+        t, err := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
+        if err != nil { return "", err }
+        if t == nil { return "", fmt.Errorf("team with key %s not found", teamKey) }
+        items, err := client.ListIssueTemplatesForTeam(t.ID)
+        if err != nil { return "", err }
+        for _, it := range items { names = append(names, it.Name) }
+    } else {
+        // Local
+        dirs := templateSearchDirs(templatesDir)
+        seen := map[string]struct{}{}
+        for _, dir := range dirs {
+            entries, err := os.ReadDir(dir)
+            if err != nil { continue }
+            for _, e := range entries {
+                if e.IsDir() { continue }
+                n := e.Name()
+                if strings.HasSuffix(strings.ToLower(n), ".md") {
+                    base := strings.TrimSuffix(n, ".md")
+                    if _, ok := seen[base]; !ok { seen[base] = struct{}{}; names = append(names, base) }
+                }
+            }
+        }
+        // Remote index
+        if base := templateBaseURL(baseOverride); base != "" {
+            if content, err := fetchURL(joinURL(base, "index.json")); err == nil {
+                var arr []string
+                var obj struct{ Templates []string `json:"templates"` }
+                if json.Unmarshal([]byte(content), &arr) == nil {
+                    for _, n := range arr { n = strings.TrimSpace(n); if n == "" { continue }; names = append(names, n) }
+                } else if json.Unmarshal([]byte(content), &obj) == nil {
+                    for _, n := range obj.Templates { n = strings.TrimSpace(n); if n == "" { continue }; names = append(names, n) }
+                }
+            }
+        }
+    }
+    if len(names) == 0 {
+        return "", errors.New("no templates available to choose from")
+    }
+    // Prompt
+    fmt.Println("Select a template:")
+    for i, n := range names { fmt.Printf("  %d) %s\n", i+1, n) }
+    fmt.Print("> ")
+    rdr := bufio.NewReader(os.Stdin)
+    line, _ := rdr.ReadString('\n')
+    choice := strings.TrimSpace(line)
+    // Try number
+    if idx, err := strconv.Atoi(choice); err == nil {
+        if idx >= 1 && idx <= len(names) { return names[idx-1], nil }
+    }
+    // Try exact match by name
+    for _, n := range names { if strings.EqualFold(n, choice) { return n, nil } }
+    // Fallback: return input as-is to allow manual entry
+    return choice, nil
+}
+
+// promptMultilineDescription asks the user for a multi-line description terminated by a single '.' on its own line.
+func promptMultilineDescription() string {
+    fmt.Println("Enter issue description. End with a single '.' on its own line:")
+    rdr := bufio.NewReader(os.Stdin)
+    var lines []string
+    for {
+        line, _ := rdr.ReadString('\n')
+        line = strings.TrimRight(line, "\r\n")
+        if line == "." { break }
+        lines = append(lines, line)
+    }
+    return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
+// promptLine prints a prompt and returns a single line input (trimmed)
+func promptLine(label string) string {
+    fmt.Print(label)
+    rdr := bufio.NewReader(os.Stdin)
+    line, _ := rdr.ReadString('\n')
+    return strings.TrimSpace(line)
+}
+
+// promptChoice prints a label and numbered options; returns the chosen option string.
+func promptChoice(label string, options []string) string {
+    if len(options) == 0 { return "" }
+    fmt.Println(label + ":")
+    for i, opt := range options { fmt.Printf("  %d) %s\n", i+1, opt) }
+    fmt.Print("> ")
+    rdr := bufio.NewReader(os.Stdin)
+    line, _ := rdr.ReadString('\n')
+    choice := strings.TrimSpace(line)
+    if idx, err := strconv.Atoi(choice); err == nil {
+        if idx >= 1 && idx <= len(options) { return options[idx-1] }
+    }
+    // fallback to matching by text
+    for _, opt := range options { if strings.EqualFold(opt, choice) { return opt } }
+    return options[0]
+}
+
+// promptChoiceStrict enforces valid selection; allowSkip adds a "(skip)" option.
+func promptChoiceStrict(label string, options []string, allowSkip bool) string {
+    opts := append([]string{}, options...)
+    if allowSkip { opts = append([]string{"(skip)"}, opts...) }
+    for {
+        choice := promptChoice(label, opts)
+        if allowSkip && (strings.EqualFold(choice, "(skip)") || strings.EqualFold(choice, "skip")) { return "" }
+        for _, opt := range opts { if strings.EqualFold(opt, choice) { return opt } }
+        fmt.Println("Invalid selection. Please choose a number or matching text.")
+    }
+}
+
+// promptMultiSelect lets user select multiple items by entering comma-separated indexes or names.
+func promptMultiSelect(label string, options []string) []string {
+    fmt.Println(label)
+    for i, opt := range options { fmt.Printf("  %d) %s\n", i+1, opt) }
+    fmt.Print("> ")
+    rdr := bufio.NewReader(os.Stdin)
+    line, _ := rdr.ReadString('\n')
+    line = strings.TrimSpace(line)
+    if line == "" { return nil }
+    parts := strings.Split(line, ",")
+    var out []string
+    for _, p := range parts {
+        v := strings.TrimSpace(p)
+        if v == "" { continue }
+        if idx, err := strconv.Atoi(v); err == nil {
+            if idx >= 1 && idx <= len(options) { out = append(out, options[idx-1]) }
+            continue
+        }
+        // match by name
+        for _, opt := range options { if strings.EqualFold(opt, v) { out = append(out, opt); break } }
+    }
+    return out
+}
+
+// promptYesNo asks a yes/no question; defaultYes controls default on empty input.
+func promptYesNo(label string, defaultYes bool) bool {
+    fmt.Print(label)
+    rdr := bufio.NewReader(os.Stdin)
+    line, _ := rdr.ReadString('\n')
+    v := strings.TrimSpace(strings.ToLower(line))
+    if v == "" { return defaultYes }
+    return v == "y" || v == "yes"
+}
+
+// openInEditor opens $VISUAL or $EDITOR (falls back to vi) to edit text; returns the updated content.
+func openInEditor(initial string) (string, error) {
+    tmp, err := os.CreateTemp("", "linear-cli-*.md")
+    if err != nil { return "", err }
+    path := tmp.Name()
+    _ = tmp.Close()
+    if err := os.WriteFile(path, []byte(initial), 0o600); err != nil { return "", err }
+    editor := strings.TrimSpace(os.Getenv("VISUAL"))
+    if editor == "" { editor = strings.TrimSpace(os.Getenv("EDITOR")) }
+    if editor == "" { editor = "vi" }
+    cmd := exec.Command(editor, path)
+    cmd.Stdin = os.Stdin
+    cmd.Stdout = os.Stdout
+    cmd.Stderr = os.Stderr
+    if err := cmd.Run(); err != nil { return "", err }
+    b, err := os.ReadFile(path)
+    if err != nil { return "", err }
+    _ = os.Remove(path)
+    return string(b), nil
+}
+
+// autoLoadTemplateByKind tries API, then remote base, then local for a given kind (e.g., "feature", "bug", "spike").
+func autoLoadTemplateByKind(kind string, cmd *cobra.Command, client *api.Client, teamID string) (string, bool) {
+    name := strings.ToLower(strings.TrimSpace(kind))
+    if name == "" { return "", false }
+    // Try API
+    if teamID != "" {
+        if tpl, err := client.IssueTemplateByNameForTeam(teamID, name); err == nil && tpl != nil && strings.TrimSpace(tpl.Description) != "" { return tpl.Description, true }
+    }
+    // Try remote/local
+    templatesDir, _ := cmd.Flags().GetString("templates-dir")
+    baseOverride, _ := cmd.Flags().GetString("templates-base-url")
+    if raw, err := loadTemplateContent(name, templatesDir, baseOverride); err == nil && strings.TrimSpace(raw) != "" { return raw, true }
+    return "", false
 }
 
 // templateBaseURL resolves the remote templates base URL from flag/env.
