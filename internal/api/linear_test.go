@@ -40,13 +40,13 @@ func respondJSON(w http.ResponseWriter, v any) {
     _ = json.NewEncoder(w).Encode(v)
 }
 
-func TestIssueByKey_UsesStringTeamIdVarType(t *testing.T) {
-    // Expect: query($teamId:String!,$number:Float!)
+func TestIssueByKey_UsesIDTeamIdVarType(t *testing.T) {
+    // Expect: query($teamId:ID!,$number:Float!)
     c := newTestClient(t, func(t *testing.T, w http.ResponseWriter, r *http.Request) {
         p := readGQL(t, r)
-        must := regexp.MustCompile(`(?s)query\s*\(\s*\$teamId:\s*String!\s*,\s*\$number:\s*Float!\s*\)\s*{`)
+        must := regexp.MustCompile(`(?s)query\s*\(\s*\$teamId:\s*ID!\s*,\s*\$number:\s*Float!\s*\)\s*{`)
         if !must.MatchString(p.Query) {
-            t.Fatalf("query did not declare $teamId as String!: %s", p.Query)
+            t.Fatalf("query did not declare $teamId as ID!: %s", p.Query)
         }
         // Return minimal response
         respondJSON(w, map[string]any{
@@ -72,7 +72,7 @@ func TestIssueByKey_UsesStringTeamIdVarType(t *testing.T) {
     if got == nil || got.ID == "" { t.Fatalf("IssueByKey got nil or empty result") }
 }
 
-func TestIssueByID_UsesStringIdVarType(t *testing.T) {
+func TestIssueByID_UsesStringVarType(t *testing.T) {
     c := newTestClient(t, func(t *testing.T, w http.ResponseWriter, r *http.Request) {
         p := readGQL(t, r)
         must := regexp.MustCompile(`(?s)query\s*\(\s*\$id:\s*String!\s*\)\s*{\s*issue\(id:\$id\)`)
@@ -98,7 +98,7 @@ func TestIssueByID_UsesStringIdVarType(t *testing.T) {
     if got == nil || got.ID == "" { t.Fatalf("IssueByID got nil or empty result") }
 }
 
-func TestGetIssueDetails_UsesStringIdVarType(t *testing.T) {
+func TestGetIssueDetails_UsesStringVarType(t *testing.T) {
     c := newTestClient(t, func(t *testing.T, w http.ResponseWriter, r *http.Request) {
         p := readGQL(t, r)
         must := regexp.MustCompile(`(?s)query\s*\(\s*\$id:\s*String!\s*\)\s*{\s*issue\(id:\$id\)`)
@@ -127,7 +127,7 @@ func TestGetIssueDetails_UsesStringIdVarType(t *testing.T) {
     if got == nil || got.ID == "" { t.Fatalf("GetIssueDetails got nil or empty result") }
 }
 
-func TestIssueComments_UsesStringIdVarType(t *testing.T) {
+func TestIssueComments_UsesStringVarType(t *testing.T) {
     c := newTestClient(t, func(t *testing.T, w http.ResponseWriter, r *http.Request) {
         p := readGQL(t, r)
         must := regexp.MustCompile(`(?s)query\s*\(\s*\$id:\s*String!\s*,\s*\$first:\s*Int!\s*\)\s*{\s*issue\(id:\$id\)`)

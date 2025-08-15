@@ -275,7 +275,7 @@ func (c *Client) IssueByID(id string) (*Issue, error) {
 }
 
 func (c *Client) IssueByKey(teamID string, number int) (*Issue, error) {
-    const q = `query($teamId:String!,$number:Float!){
+    const q = `query($teamId:ID!,$number:Float!){
   issues(first:1, filter:{ and:[ { team: { id: { eq: $teamId } } }, { number: { eq: $number } } ] }){
     nodes{ id identifier title description url state{ name } }
   }

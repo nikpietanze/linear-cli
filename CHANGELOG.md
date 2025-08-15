@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format follows Keep a Changelog, and this project adheres to Semantic Versioning.
 
 ## [v0.1.2] - 2025-08-15
+## [v0.1.3] - 2025-08-15
+### Fixed
+- GraphQL variable types aligned with Linear schema to resolve 400 errors when viewing issues:
+  - Use `String!` for `issue(id: ...)`
+  - Use `ID!` for `team.id` filters
+- Added regression tests to enforce correct variable types
+
 ### Added
 - Shell completion command: `linear-cli completion [bash|zsh|fish|powershell]`
 
@@ -31,7 +38,8 @@ The format follows Keep a Changelog, and this project adheres to Semantic Versio
 - Tests: internal API tests and command-level test for `issues view`.
 - CI: GitHub Actions release workflow publishing darwin/linux for amd64 and arm64.
 
-[Unreleased]: https://github.com/nikpietanze/linear-cli/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/nikpietanze/linear-cli/compare/v0.1.3...HEAD
+[v0.1.3]: https://github.com/nikpietanze/linear-cli/releases/tag/v0.1.3
 [v0.1.2]: https://github.com/nikpietanze/linear-cli/releases/tag/v0.1.2
 [v0.1.1]: https://github.com/nikpietanze/linear-cli/releases/tag/v0.1.1
 [v0.1.0]: https://github.com/nikpietanze/linear-cli/releases/tag/v0.1.0
