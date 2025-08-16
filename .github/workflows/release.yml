@@ -73,5 +73,7 @@ jobs:
           files: dist/*.tar.gz
           tag_name: ${{ inputs.version }}
           body_path: NOTES.md
+          fail_on_unmatched_files: false
+          append_body: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
