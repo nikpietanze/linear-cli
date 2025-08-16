@@ -52,19 +52,30 @@ jobs:
         run: |
           set -euo pipefail
           if [ -f CHANGELOG.md ]; then
+            # Extract changelog section for this version
+            # Matches: ## [v0.2.0] - 2025-01-27
             awk -v ver="${VERSION}" '
-              $0 ~ "^## \\"[" ver "\\\"]" {flag=1; next}
+              $0 ~ "^## \\[" ver "\\]" {flag=1; next}
               /^## / && flag {exit}
-              flag {print}
+              flag && NF > 0 {print}
             ' CHANGELOG.md > RELEASE_NOTES.md || true
+            
+            # Remove any trailing empty lines
+            sed -i.bak '/^[[:space:]]*$/d' RELEASE_NOTES.md 2>/dev/null || true
+            rm -f RELEASE_NOTES.md.bak 2>/dev/null || true
           fi
+          
+          # Create final release notes
           if [ ! -s RELEASE_NOTES.md ]; then
-            echo "linear-cli ${VERSION}" > NOTES.md
+            echo "Release ${VERSION}" > NOTES.md
           else
             {
-              echo "linear-cli ${VERSION}";
+              echo "## What's New in ${VERSION}";
               echo;
               cat RELEASE_NOTES.md;
+              echo;
+              echo "---";
+              echo "**Full Changelog**: https://github.com/nikpietanze/linear-cli/blob/main/CHANGELOG.md";
             } > NOTES.md
           fi
       - name: Upload assets
