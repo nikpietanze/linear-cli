@@ -1,14 +1,14 @@
 package cmd
 
 import (
-    "fmt"
-    "os"
-    "runtime"
-    "strings"
+	"fmt"
+	"os"
+	"runtime"
+	"strings"
 
-    "linear-cli/internal/output"
+	"linear-cli/internal/output"
 
-    "github.com/spf13/cobra"
+	"github.com/spf13/cobra"
 )
 
 // These are injected at build time via -ldflags. Defaults are for dev builds.
@@ -19,22 +19,26 @@ var (
 
 var rootCmd = &cobra.Command{
     Use:   "linear-cli",
-    Short: "A fast CLI to work with Linear issues",
-    Long:  "linear-cli is a fast, plug-and-play CLI to authenticate with Linear and create or read issues via their GraphQL API.",
-    Example: `  # Authenticate (stored in ~/.config/linear/config.toml)
+    Short: "AI-optimized CLI for Linear issue management",
+    Long:  "linear-cli is designed for AI agents and automation workflows. Create structured Linear issues with single commands, automatic template discovery, and intelligent caching.",
+    Example: `  # 🤖 AI AGENT WORKFLOW (Recommended)
+  # 1. Authenticate once
   linear-cli auth login
-
-  # Quick auth status (JSON)
-  linear-cli --json auth status
-
-  # List issues with filters
-  linear-cli issues list --project "Website" --assignee "Jane" --state "In Progress"
-
-  # View an issue by key or ID
+  
+  # 2. Create structured issues instantly
+  linear-cli issues create --team ENG --template "Feature Template" --title "Add search" \
+    --sections Summary="Implement user search" --sections Context="Users need to find content"
+  
+  # 3. Discover templates dynamically  
+  linear-cli issues template structure --team ENG
+  
+  # 👤 HUMAN WORKFLOW
+  # Interactive creation
+  linear-cli issues create --team ENG
+  
+  # View and manage issues
   linear-cli issues view ENG-123
-
-  # Create an issue with team key and bug template
-  linear-cli issues create --title "Bug" --team ENG --template bug --label bug --priority 2`,
+  linear-cli issues list --project "Website"`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	RunE: func(cmd *cobra.Command, args []string) error {

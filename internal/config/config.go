@@ -12,6 +12,17 @@ import (
 // and environment variables. Environment variables always take precedence.
 type Config struct {
     APIKey string `toml:"api_key"`
+    TeamPrefs map[string]TeamPrefs `toml:"team_prefs"`
+}
+
+// TeamPrefs stores last-used selections per team (keyed by team key, e.g., ENG)
+type TeamPrefs struct {
+    LastProjectID  string   `toml:"last_project_id"`
+    LastAssigneeID string   `toml:"last_assignee_id"`
+    LastPriority   int      `toml:"last_priority"`
+    LastStateID    string   `toml:"last_state_id"`
+    LastTemplate   string   `toml:"last_template"`
+    LastLabels     []string `toml:"last_labels"`
 }
 
 func configTomlPath() (string, error) {
@@ -147,4 +158,13 @@ func extractJSONStringValue(s string) string {
         i++
     }
     return ""
+}
+
+// GetConfigDir returns the linear configuration directory
+func GetConfigDir() (string, error) {
+    dir, err := os.UserConfigDir()
+    if err != nil {
+        return "", err
+    }
+    return filepath.Join(dir, "linear"), nil
 }

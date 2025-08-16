@@ -1,15 +1,15 @@
 package api
 
 import (
-    "bytes"
-    "encoding/json"
-    "errors"
-    "fmt"
-    "os"
-    "net/http"
-    "regexp"
-    "strings"
-    "time"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"os"
+	"regexp"
+	"strings"
+	"time"
 )
 
 type Client struct {
@@ -66,6 +66,7 @@ func NewClient(apiKey string) *Client {
         endpoint:   endpoint,
         allowedMutations: map[string]struct{}{
             "issueCreate": {},
+            "issueUpdate": {},
             "commentCreate": {},
         },
     }
@@ -400,35 +401,59 @@ func (c *Client) ListProjects() ([]Project, error) {
 // ListProjectsAll returns a larger set of projects (up to 200) for selection
 func (c *Client) ListProjectsAll(limit int) ([]Project, error) {
     if limit <= 0 { limit = 200 }
-    const q = `query($first:Int!){ projects(first:$first){ nodes{ id name state url team{ id } } } }`
-    var resp struct { Projects struct{ Nodes []struct{ ID, Name, State, URL string; Team *struct{ ID string } `json:"team"` } `json:"nodes"` } `json:"projects"` }
+    const q = `query($first:Int!){ projects(first:$first){ nodes{ id name state url } } }`
+    var resp struct { Projects struct{ Nodes []struct{ ID, Name, State, URL string } `json:"nodes"` } `json:"projects"` }
     if err := c.do(q, map[string]interface{}{"first": limit}, &resp); err != nil { return nil, err }
     out := make([]Project, 0, len(resp.Projects.Nodes))
-    for _, n := range resp.Projects.Nodes {
-        var teamID string
-        if n.Team != nil { teamID = n.Team.ID }
-        out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: teamID})
-    }
+    for _, n := range resp.Projects.Nodes { out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL}) }
     return out, nil
 }
 
 // ListProjectsByTeam returns projects that belong to a given team
 func (c *Client) ListProjectsByTeam(teamID string, limit int) ([]Project, error) {
     if limit <= 0 { limit = 200 }
-    const q = `query($teamId:String!,$first:Int!){ projects(first:$first, filter:{ team:{ id:{ eq:$teamId }}}){ nodes{ id name state url team{ id } } } }`
-    var resp struct { Projects struct{ Nodes []struct{ ID, Name, State, URL string; Team *struct{ ID string } `json:"team"` } `json:"nodes"` } `json:"projects"` }
-    if err := c.do(q, map[string]interface{}{"teamId": teamID, "first": limit}, &resp); err != nil { return nil, err }
-    out := make([]Project, 0, len(resp.Projects.Nodes))
-    for _, n := range resp.Projects.Nodes {
-        var tID string
-        if n.Team != nil { tID = n.Team.ID }
-        out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: tID})
+    // 1) Prefer team.projects relation when available
+    {
+        const q = `query($id:String!,$first:Int!){ team(id:$id){ projects(first:$first){ nodes{ id name state url } } } }`
+        var resp struct {
+            Team *struct{
+                Projects struct{
+                    Nodes []struct{ ID, Name, State, URL string } `json:"nodes"`
+                } `json:"projects"`
+            } `json:"team"`
+        }
+        if err := c.do(q, map[string]interface{}{"id": teamID, "first": limit}, &resp); err == nil && resp.Team != nil {
+            nodes := resp.Team.Projects.Nodes
+            if len(nodes) > 0 {
+                out := make([]Project, 0, len(nodes))
+                for _, n := range nodes { out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: teamID}) }
+                return out, nil
+            }
+        }
     }
-    return out, nil
+    // 2) Try root projects filter using ID type
+    {
+        const q = `query($teamId:ID!,$first:Int!){ projects(first:$first, filter:{ teams:{ some:{ id:{ eq:$teamId }}}}){ nodes{ id name state url } } }`
+        var resp struct { Projects struct{ Nodes []struct{ ID, Name, State, URL string } `json:"nodes"` } `json:"projects"` }
+        if err := c.do(q, map[string]interface{}{"teamId": teamID, "first": limit}, &resp); err == nil && len(resp.Projects.Nodes) > 0 {
+            out := make([]Project, 0, len(resp.Projects.Nodes))
+            for _, n := range resp.Projects.Nodes { out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: teamID}) }
+            return out, nil
+        }
+    }
+    // 3) Fallback to root projects filter using String type (legacy schema)
+    {
+        const q = `query($teamId:String!,$first:Int!){ projects(first:$first, filter:{ teams:{ some:{ id:{ eq:$teamId }}}}){ nodes{ id name state url } } }`
+        var resp struct { Projects struct{ Nodes []struct{ ID, Name, State, URL string } `json:"nodes"` } `json:"projects"` }
+        if err := c.do(q, map[string]interface{}{"teamId": teamID, "first": limit}, &resp); err != nil { return nil, err }
+        out := make([]Project, 0, len(resp.Projects.Nodes))
+        for _, n := range resp.Projects.Nodes { out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: teamID}) }
+        return out, nil
+    }
 }
 // ListProjectsDetailed returns id, name, state, url
 func (c *Client) ListProjectsDetailed() ([]Project, error) {
-    const q = `query { projects(first: 50) { nodes { id name state url team { id } } } }`
+    const q = `query { projects(first: 50) { nodes { id name state url } } }`
     var resp struct {
         Projects struct {
             Nodes []struct {
@@ -436,17 +461,12 @@ func (c *Client) ListProjectsDetailed() ([]Project, error) {
                 Name  string `json:"name"`
                 State string `json:"state"`
                 URL   string `json:"url"`
-                Team  *struct{ ID string `json:"id"` } `json:"team"`
             } `json:"nodes"`
         } `json:"projects"`
     }
     if err := c.do(q, nil, &resp); err != nil { return nil, err }
     out := make([]Project, 0, len(resp.Projects.Nodes))
-    for _, n := range resp.Projects.Nodes {
-        var teamID string
-        if n.Team != nil { teamID = n.Team.ID }
-        out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL, TeamID: teamID})
-    }
+    for _, n := range resp.Projects.Nodes { out = append(out, Project{ID: n.ID, Name: n.Name, State: n.State, URL: n.URL}) }
     return out, nil
 }
 
@@ -582,6 +602,7 @@ type IssueCreateInput struct {
     ProjectID   string
     TeamID      string
     StateID     string
+    TemplateID  string
     Title       string
     Description string
     AssigneeID  string
@@ -598,6 +619,7 @@ func (c *Client) CreateIssueAdvanced(in IssueCreateInput) (*IssueDetails, error)
     if in.ProjectID != "" { input["projectId"] = in.ProjectID }
     if in.TeamID != "" { input["teamId"] = in.TeamID }
     if in.StateID != "" { input["stateId"] = in.StateID }
+    if in.TemplateID != "" { input["templateId"] = in.TemplateID }
     if in.AssigneeID != "" { input["assigneeId"] = in.AssigneeID }
     if len(in.LabelIDs) > 0 { input["labelIds"] = in.LabelIDs }
     if in.Priority != nil { input["priority"] = *in.Priority }
@@ -607,6 +629,26 @@ func (c *Client) CreateIssueAdvanced(in IssueCreateInput) (*IssueDetails, error)
     if err := c.do(q, map[string]interface{}{"input": input}, &resp); err != nil { return nil, err }
     if !resp.IssueCreate.Success || resp.IssueCreate.Issue == nil { return nil, errors.New("issue creation failed") }
     n := resp.IssueCreate.Issue
+    var proj *Project
+    if n.Project != nil { proj = &Project{ID: n.Project.ID, Name: n.Project.Name, State: n.Project.State} }
+    return &IssueDetails{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, StateName: n.State.Name, Assignee: n.Assignee, Labels: n.Labels.Nodes, Project: proj}, nil
+}
+
+// UpdateIssue updates an existing issue's description and/or title
+func (c *Client) UpdateIssue(issueID, title, description string) (*IssueDetails, error) {
+    if issueID == "" {
+        return nil, errors.New("issueID cannot be empty")
+    }
+    
+    input := map[string]interface{}{"id": issueID}
+    if title != "" { input["title"] = title }
+    if description != "" { input["description"] = description }
+
+    const q = `mutation($input: IssueUpdateInput!){ issueUpdate(input:$input){ success issue{ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state } } } }`
+    var resp struct { IssueUpdate struct{ Success bool `json:"success"`; Issue *struct { ID, Identifier, Title, Description, URL string; State struct{ Name string `json:"name"` } `json:"state"`; Assignee *User `json:"assignee"`; Labels struct{ Nodes []Label `json:"nodes"` } `json:"labels"`; Project *struct{ ID, Name, State string } `json:"project"` } `json:"issue"` } `json:"issueUpdate"` }
+    if err := c.do(q, map[string]interface{}{"input": input}, &resp); err != nil { return nil, err }
+    if !resp.IssueUpdate.Success || resp.IssueUpdate.Issue == nil { return nil, errors.New("issue update failed") }
+    n := resp.IssueUpdate.Issue
     var proj *Project
     if n.Project != nil { proj = &Project{ID: n.Project.ID, Name: n.Project.Name, State: n.Project.State} }
     return &IssueDetails{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, StateName: n.State.Name, Assignee: n.Assignee, Labels: n.Labels.Nodes, Project: proj}, nil
@@ -650,11 +692,29 @@ func (c *Client) ListIssueTemplatesForTeam(teamID string) ([]IssueTemplate, erro
             return resp.Team.IssueTemplates.Nodes, nil
         }
     }
+    // Alternative Team.templates
+    {
+        const q = `query($teamId:String!){ team(id:$teamId){ templates(first:100){ nodes{ id name description } } } }`
+        var resp struct{ Team *struct{ Templates *struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"templates"` } `json:"team"` }
+        if err := c.do(q, map[string]interface{}{"teamId": teamID}, &resp); err == nil && resp.Team != nil && resp.Team.Templates != nil {
+            return resp.Team.Templates.Nodes, nil
+        }
+    }
     // Fallback root connection with filter
     const q = `query($teamId:String!){ issueTemplates(first:100, filter:{ team:{ id:{ eq:$teamId }}}){ nodes{ id name description } } }`
     var resp struct{ IssueTemplates struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"issueTemplates"` }
-    if err := c.do(q, map[string]interface{}{"teamId": teamID}, &resp); err != nil { return nil, err }
-    return resp.IssueTemplates.Nodes, nil
+    if err := c.do(q, map[string]interface{}{"teamId": teamID}, &resp); err == nil && len(resp.IssueTemplates.Nodes) > 0 {
+        return resp.IssueTemplates.Nodes, nil
+    }
+    // Alternative root templates
+    {
+        const q2 = `query($teamId:String!){ templates(first:100, filter:{ team:{ id:{ eq:$teamId }}}){ nodes{ id name description } } }`
+        var resp2 struct{ Templates struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"templates"` }
+        if err := c.do(q2, map[string]interface{}{"teamId": teamID}, &resp2); err == nil {
+            return resp2.Templates.Nodes, nil
+        }
+    }
+    return nil, nil
 }
 
 // IssueTemplateByID fetches a single template by id using issueTemplate field, falling back to filtering connection
@@ -666,40 +726,205 @@ func (c *Client) IssueTemplateByID(id string) (*IssueTemplate, error) {
             return resp.IssueTemplate, nil
         }
     }
+    {
+        const q = `query($id:String!){ template(id:$id){ id name description } }`
+        var resp struct{ Template *IssueTemplate `json:"template"` }
+        if err := c.do(q, map[string]interface{}{"id": id}, &resp); err == nil && resp.Template != nil {
+            return resp.Template, nil
+        }
+    }
     const q = `query($id:String!){ issueTemplates(first:1, filter:{ id:{ eq:$id }}){ nodes{ id name description } } }`
     var resp struct{ IssueTemplates struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"issueTemplates"` }
-    if err := c.do(q, map[string]interface{}{"id": id}, &resp); err != nil { return nil, err }
-    if len(resp.IssueTemplates.Nodes) == 0 { return nil, nil }
-    t := resp.IssueTemplates.Nodes[0]
-    return &t, nil
+    if err := c.do(q, map[string]interface{}{"id": id}, &resp); err == nil && len(resp.IssueTemplates.Nodes) > 0 {
+        t := resp.IssueTemplates.Nodes[0]
+        return &t, nil
+    }
+    {
+        const q2 = `query($id:String!){ templates(first:1, filter:{ id:{ eq:$id }}){ nodes{ id name description } } }`
+        var resp2 struct{ Templates struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"templates"` }
+        if err := c.do(q2, map[string]interface{}{"id": id}, &resp2); err == nil && len(resp2.Templates.Nodes) > 0 {
+            t := resp2.Templates.Nodes[0]
+            return &t, nil
+        }
+    }
+    return nil, nil
 }
 
 // IssueTemplateByNameForTeam resolves a template by exact name within a team
 func (c *Client) IssueTemplateByNameForTeam(teamID, name string) (*IssueTemplate, error) {
-    const q = `query($teamId:String!,$name:String!){ issueTemplates(first:2, filter:{ and:[ { team:{ id:{ eq:$teamId }} }, { name:{ eq:$name }} ]}){ nodes{ id name description } } }`
-    var resp struct{ IssueTemplates struct{ Nodes []IssueTemplate `json:"nodes"` } `json:"issueTemplates"` }
-    if err := c.do(q, map[string]interface{}{"teamId": teamID, "name": name}, &resp); err != nil { return nil, err }
-    if len(resp.IssueTemplates.Nodes) == 0 { return nil, nil }
-    if len(resp.IssueTemplates.Nodes) > 1 { return nil, fmt.Errorf("multiple templates named '%s'", name) }
-    t := resp.IssueTemplates.Nodes[0]
-    return &t, nil
+    // Use the same successful query path as ListIssueTemplatesForTeam, then filter client-side
+    templates, err := c.ListIssueTemplatesForTeam(teamID)
+    if err != nil {
+        return nil, err
+    }
+    
+    // Exact match first
+    for _, t := range templates {
+        if strings.TrimSpace(t.Name) == strings.TrimSpace(name) {
+            return &t, nil
+        }
+    }
+    
+    // Case-insensitive match
+    targetLower := strings.ToLower(strings.TrimSpace(name))
+    for _, t := range templates {
+        if strings.ToLower(strings.TrimSpace(t.Name)) == targetLower {
+            return &t, nil
+        }
+    }
+    
+    return nil, nil
+}
+
+// TemplateBodyByIDDynamic attempts to read a template's body using the best-available field.
+// It introspects the Template type fields and prefers these in order: content, body, description, markdown, text.
+func (c *Client) TemplateBodyByIDDynamic(id string) (title string, body string, usedField string, err error) {
+    // Introspect Template fields
+    fields, _ := c.TemplateTypeFieldNames()
+    toLowerSet := func(ss []string) map[string]struct{} {
+        m := map[string]struct{}{}
+        for _, s := range ss { m[strings.ToLower(strings.TrimSpace(s))] = struct{}{} }
+        return m
+    }
+    present := toLowerSet(fields)
+    // Candidate scalar fields in priority order
+    scalar := []string{"content", "contentmarkdown", "contentmd", "body", "bodymarkdown", "markdown", "text", "description"}
+    // Build selection with whichever scalar fields are present
+    sels := []string{"name"}
+    picks := []string{}
+    for _, f := range scalar {
+        if _, ok := present[f]; ok { sels = append(sels, f); picks = append(picks, f) }
+    }
+    hasBlocks := false
+    if _, ok := present["blocks"]; ok { hasBlocks = true; sels = append(sels, "blocks { markdown content text body description }") }
+    q := "query($id:String!){ template(id:$id){ " + strings.Join(sels, " ") + " } }"
+    var out map[string]any
+    if e := c.do(q, map[string]any{"id": id}, &out); e != nil { return "", "", "", e }
+    tpl, _ := out["template"].(map[string]any)
+    if tpl == nil { return "", "", "", nil }
+    // title
+    if n, ok := tpl["name"].(string); ok { title = n }
+    // try scalar picks in order
+    for _, key := range picks {
+        if v, ok := tpl[key]; ok {
+            if s, ok2 := v.(string); ok2 && strings.TrimSpace(s) != "" { return title, s, key, nil }
+        }
+    }
+    // try blocks aggregation
+    if hasBlocks {
+        if arr, ok := tpl["blocks"].([]any); ok && len(arr) > 0 {
+            var b strings.Builder
+            for i, it := range arr {
+                m, _ := it.(map[string]any)
+                if m == nil { continue }
+                // choose best available subfield
+                for _, sub := range []string{"markdown", "content", "text", "body", "description"} {
+                    if v, ok := m[sub]; ok {
+                        if s, ok2 := v.(string); ok2 && strings.TrimSpace(s) != "" {
+                            if i > 0 { b.WriteString("\n\n") }
+                            b.WriteString(s)
+                            break
+                        }
+                    }
+                }
+            }
+            if bs := strings.TrimSpace(b.String()); bs != "" { return title, bs, "blocks", nil }
+        }
+    }
+    // Fallback to description if present even empty
+    if v, ok := tpl["description"]; ok {
+        if s, ok2 := v.(string); ok2 { return title, s, "description", nil }
+    }
+    return title, "", "", nil
+}
+
+// IssueTemplateByNameForTeamFull finds a template by (case-insensitive) name within a team
+// and returns its title and body using dynamic field detection.
+func (c *Client) IssueTemplateByNameForTeamFull(teamID, name string) (title string, body string, err error) {
+    items, e := c.ListIssueTemplatesForTeam(teamID)
+    if e != nil { return "", "", e }
+    if len(items) == 0 { return "", "", nil }
+    target := strings.ToLower(strings.TrimSpace(name))
+    var picked *IssueTemplate
+    for _, it := range items { if strings.ToLower(strings.TrimSpace(it.Name)) == target { picked = &it; break } }
+    if picked == nil {
+        for _, it := range items { if strings.Contains(strings.ToLower(strings.TrimSpace(it.Name)), target) { picked = &it; break } }
+    }
+    if picked == nil { return "", "", nil }
+    t, b, _, e2 := c.TemplateBodyByIDDynamic(picked.ID)
+    if e2 != nil { return "", "", e2 }
+    return t, b, nil
+}
+
+// TemplateTypeFieldNames returns all field names on the Template GraphQL type
+func (c *Client) TemplateTypeFieldNames() ([]string, error) {
+    const q = `query{ __type(name:"Template"){ fields{ name } } }`
+    var resp struct{ Type *struct{ Fields []struct{ Name string `json:"name"` } `json:"fields"` } `json:"__type"` }
+    if err := c.do(q, nil, &resp); err != nil { return nil, err }
+    if resp.Type == nil { return nil, nil }
+    out := make([]string, 0, len(resp.Type.Fields))
+    for _, f := range resp.Type.Fields { out = append(out, f.Name) }
+    return out, nil
+}
+
+// TemplateNodeByIDRaw returns a map of selected fields for a template node, using a safe intersection
+// of common field names and fields present in the schema.
+func (c *Client) TemplateNodeByIDRaw(id string) (map[string]any, error) {
+    fields, _ := c.TemplateTypeFieldNames()
+    allowed := map[string]struct{}{ "id":{}, "name":{}, "content":{}, "body":{}, "description":{}, "markdown":{}, "text":{} }
+    sels := []string{"id", "name"}
+    for _, f := range fields {
+        lf := strings.ToLower(strings.TrimSpace(f))
+        if _, ok := allowed[lf]; ok && lf != "id" && lf != "name" { sels = append(sels, lf) }
+    }
+    if len(sels) == 2 { // fallback minimal
+        sels = append(sels, "description")
+    }
+    sel := strings.Join(sels, " ")
+    q := "query($id:String!){ template(id:$id){ " + sel + " } }"
+    var out map[string]any
+    if err := c.do(q, map[string]any{"id": id}, &out); err != nil { return nil, err }
+    node, _ := out["template"].(map[string]any)
+    return node, nil
+}
+
+// FindTemplateForTeamByKeywords lists team templates and returns the first whose name
+// matches any of the provided keywords using loose, case-insensitive matching.
+// It strips common suffixes like "template" for better matching.
+func (c *Client) FindTemplateForTeamByKeywords(teamID string, keywords []string) (*IssueTemplate, error) {
+    items, err := c.ListIssueTemplatesForTeam(teamID)
+    if err != nil { return nil, err }
+    if len(items) == 0 { return nil, nil }
+    normalize := func(s string) string {
+        s = strings.ToLower(strings.TrimSpace(s))
+        s = strings.TrimSuffix(s, " template")
+        s = strings.TrimSuffix(s, " templates")
+        return strings.TrimSpace(s)
+    }
+    for _, kw := range keywords {
+        k := normalize(kw)
+        // exact match first
+        for _, it := range items { if normalize(it.Name) == k { return &it, nil } }
+        // contains match as fallback
+        for _, it := range items { if strings.Contains(normalize(it.Name), k) { return &it, nil } }
+    }
+    return nil, nil
 }
 
 // CreateIssueFromTemplate attempts to create an issue using templateId in IssueCreateInput
 func (c *Client) CreateIssueFromTemplate(teamID, templateID, title string) (*IssueDetails, error) {
-    input := map[string]interface{}{
-        "teamId":     teamID,
-        "templateId": templateID,
-        "title":      title,
-    }
-    const q = `mutation($input: IssueCreateInput!){ issueCreate(input:$input){ success issue{ id identifier title description url state{ name } assignee{ id name email } labels{ nodes{ id name } } project{ id name state } } } }`
-    var resp struct { IssueCreate struct{ Success bool `json:"success"`; Issue *struct { ID, Identifier, Title, Description, URL string; State struct{ Name string `json:"name"` } `json:"state"`; Assignee *User `json:"assignee"`; Labels struct{ Nodes []Label `json:"nodes"` } `json:"labels"`; Project *struct{ ID, Name, State string } `json:"project"` } `json:"issue"` } `json:"issueCreate"` }
-    if err := c.do(q, map[string]interface{}{"input": input}, &resp); err != nil { return nil, err }
-    if !resp.IssueCreate.Success || resp.IssueCreate.Issue == nil { return nil, errors.New("issue creation failed") }
-    n := resp.IssueCreate.Issue
-    var proj *Project
-    if n.Project != nil { proj = &Project{ID: n.Project.ID, Name: n.Project.Name, State: n.Project.State} }
-    return &IssueDetails{ID: n.ID, Identifier: n.Identifier, Title: n.Title, Description: n.Description, URL: n.URL, StateName: n.State.Name, Assignee: n.Assignee, Labels: n.Labels.Nodes, Project: proj}, nil
+    // Backwards-compatible convenience wrapper
+    return c.CreateIssueAdvanced(IssueCreateInput{TeamID: teamID, TemplateID: templateID, Title: title})
+}
+
+// SupportsIssueCreateTemplateId checks if IssueCreateInput has templateId
+func (c *Client) SupportsIssueCreateTemplateId() bool {
+    // Reuse supportsTemplates cache if already checked; otherwise introspect input fields
+    const q = `query{ __type(name:"IssueCreateInput"){ inputFields{ name } } }`
+    var resp struct{ Type *struct{ InputFields []struct{ Name string `json:"name"` } `json:"inputFields"` } `json:"__type"` }
+    if err := c.do(q, nil, &resp); err != nil || resp.Type == nil { return false }
+    for _, f := range resp.Type.InputFields { if strings.EqualFold(f.Name, "templateId") { return true } }
+    return false
 }
 
 // --- Comments ---
@@ -759,3 +984,19 @@ func (c *Client) IssueComments(issueID string, limit int) ([]Comment, error) {
     if resp.Issue == nil { return nil, nil }
     return resp.Issue.Comments.Nodes, nil
 }
+
+// ListTeams returns all teams the user has access to
+func (c *Client) ListTeams() ([]Team, error) {
+    const q = `query{ teams(first:100){ nodes{ id key name } } }`
+    var resp struct {
+        Teams struct {
+            Nodes []Team `json:"nodes"`
+        } `json:"teams"`
+    }
+    if err := c.do(q, nil, &resp); err != nil {
+        return nil, err
+    }
+    return resp.Teams.Nodes, nil
+}
+
+

@@ -1,23 +1,24 @@
 package cmd
 
 import (
-    "bufio"
-    "encoding/json"
-    "errors"
-    "fmt"
-    "io"
-    "net/http"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "regexp"
-    "strconv"
-    "strings"
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
 
-    "linear-cli/internal/api"
-    "linear-cli/internal/config"
+	"linear-cli/internal/api"
+	"linear-cli/internal/config"
 
-    "github.com/spf13/cobra"
+	"github.com/spf13/cobra"
 )
 
 // Enhanced issues commands per requirements (filters, view, create with resolution)
@@ -87,6 +88,141 @@ Sources:
     RunE: func(cmd *cobra.Command, args []string) error { return cmd.Help() },
 }
 
+// issuesTemplateStructureCmd shows template sections for AI agents
+var issuesTemplateStructureCmd = &cobra.Command{
+    Use:   "structure --team <key> [--template <name>]",
+    Short: "Show available templates and their structure for AI agents",
+    Long: `Shows available templates for a team and their section structure.
+This helps AI agents understand what templates exist and what sections are available.
+
+Without --template: Lists all available templates for the team
+With --template: Shows the section structure for a specific template
+
+Example output:
+  Available templates for team ENG:
+  - Feature Template
+  - Bug Template  
+  - Enhancement Template
+  - Research Template
+
+  Structure for "Feature Template":
+  - Summary
+  - Context
+  - Requirements
+  - Definition of Done
+
+AI agents can then use: --template "Feature Template" --sections Summary="Brief desc"`,
+    RunE: func(cmd *cobra.Command, args []string) error {
+        cfg, _ := config.Load()
+        if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
+        client := api.NewClient(cfg.APIKey)
+        
+        teamKey, _ := cmd.Flags().GetString("team")
+        templateName, _ := cmd.Flags().GetString("template")
+        
+        if strings.TrimSpace(teamKey) == "" { return errors.New("--team is required") }
+        
+        // Get team
+        team, err := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
+        if err != nil { return err }
+        if team == nil { return fmt.Errorf("team with key %s not found", teamKey) }
+        
+        // If no specific template requested, list all available templates
+        if strings.TrimSpace(templateName) == "" {
+            templates, err := client.ListIssueTemplatesForTeam(team.ID)
+            if err != nil { return err }
+            
+            p := printer(cmd)
+            if p.JSONEnabled() {
+                templateNames := make([]string, len(templates))
+                for i, t := range templates {
+                    templateNames[i] = t.Name
+                }
+                return p.PrintJSON(map[string]interface{}{
+                    "team": teamKey,
+                    "templates": templateNames,
+                })
+            }
+            
+            fmt.Printf("Available templates for team %s:\n", teamKey)
+            for _, template := range templates {
+                fmt.Printf("  - %s\n", template.Name)
+            }
+            fmt.Printf("\nTo see structure: linear-cli issues template structure --team %s --template \"Template Name\"\n", teamKey)
+            return nil
+        }
+        
+        // Get template info from local cache (no temporary issues needed!)
+        templateInfo, templateContent, err := GetLocalTemplate(teamKey, templateName)
+        if err != nil {
+            return fmt.Errorf("template not found locally. Run 'linear-cli templates sync --team %s' first. Error: %w", teamKey, err)
+        }
+        
+        // Parse sections from cached template content
+        sections := ParseTemplateSections(templateContent)
+        
+        p := printer(cmd)
+        if p.JSONEnabled() {
+            return p.PrintJSON(map[string]interface{}{
+                "template": templateInfo.Name,
+                "sections": sections,
+                "example": fmt.Sprintf("--template \"%s\" --sections %s", templateInfo.Name, buildExampleSections(sections)),
+            })
+        }
+        
+        fmt.Printf("Template: %s\n", templateInfo.Name)
+        fmt.Printf("Available sections:\n")
+        for _, section := range sections {
+            fmt.Printf("  - %s\n", section)
+        }
+        fmt.Printf("\nExample usage:\n")
+        fmt.Printf("  linear-cli issues create --team %s --template \"%s\" --title \"Your title\" \\\n", teamKey, templateInfo.Name)
+        fmt.Printf("    --sections %s\n", buildExampleSections(sections))
+        
+        return nil
+    },
+}
+
+// issuesTemplateShowCmd prints template title and description by name from API for a given team
+var issuesTemplateShowCmd = &cobra.Command{
+    Use:   "show",
+    Short: "Show a template's title and description from the API",
+    RunE: func(cmd *cobra.Command, args []string) error {
+        cfg, _ := config.Load()
+        if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
+        teamKey, _ := cmd.Flags().GetString("team")
+        name, _ := cmd.Flags().GetString("name")
+        if strings.TrimSpace(teamKey) == "" || strings.TrimSpace(name) == "" {
+            return errors.New("--team and --name are required")
+        }
+        client := api.NewClient(cfg.APIKey)
+        t, err := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
+        if err != nil { return err }
+        if t == nil { return fmt.Errorf("team with key %s not found", teamKey) }
+        // Try dynamic full first
+        title, body, err := client.IssueTemplateByNameForTeamFull(t.ID, name)
+        if err != nil { return err }
+        // If body is still empty (or literal "null"), dump raw node fields for debugging
+        if strings.TrimSpace(body) == "" || strings.EqualFold(strings.TrimSpace(body), "null") {
+            items, _ := client.ListIssueTemplatesForTeam(t.ID)
+            var picked *api.IssueTemplate
+            for _, it := range items { if strings.EqualFold(strings.TrimSpace(it.Name), strings.TrimSpace(name)) { picked = &it; break } }
+            if picked == nil {
+                for _, it := range items { if strings.Contains(strings.ToLower(strings.TrimSpace(it.Name)), strings.ToLower(strings.TrimSpace(name))) { picked = &it; break } }
+            }
+            if picked != nil {
+                node, _ := client.TemplateNodeByIDRaw(picked.ID)
+                return printer(cmd).PrintJSON(map[string]any{"title": picked.Name, "node": node})
+            }
+            return fmt.Errorf("template '%s' not found or has no body", name)
+        }
+        p := printer(cmd)
+        if p.JSONEnabled() { return p.PrintJSON(map[string]any{"title": title, "description": body}) }
+        fmt.Printf("%s\n\n%s\n", title, strings.TrimSpace(body))
+        return nil
+    },
+}
+
 var issuesTemplateListCmd = &cobra.Command{
     Use:   "list",
     Short: "List available templates",
@@ -95,6 +231,21 @@ var issuesTemplateListCmd = &cobra.Command{
         baseOverride, _ := cmd.Flags().GetString("templates-base-url")
         source, _ := cmd.Flags().GetString("templates-source")
         teamKey, _ := cmd.Flags().GetString("team")
+        
+        // If team is provided and source is auto, prefer API
+        if source == "auto" && strings.TrimSpace(teamKey) != "" {
+            cfg, _ := config.Load()
+            if cfg.APIKey != "" {
+                source = "api"
+            }
+        } else if source == "api" || (source == "auto") {
+            // Auto-prefer API when available
+            cfg, _ := config.Load()
+            if cfg.APIKey != "" {
+                client := api.NewClient(cfg.APIKey)
+                if client.SupportsIssueTemplates() { source = "api" }
+            }
+        }
         if source == "api" {
             cfg, _ := config.Load()
             if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
@@ -168,24 +319,97 @@ var issuesTemplatePreviewCmd = &cobra.Command{
         baseOverride, _ := cmd.Flags().GetString("templates-base-url")
         source, _ := cmd.Flags().GetString("templates-source")
         teamKey, _ := cmd.Flags().GetString("team")
+        debug, _ := cmd.Flags().GetBool("debug")
+        
+        // If team is provided and source is auto, prefer API
+        if source == "auto" && strings.TrimSpace(teamKey) != "" {
+            cfg, _ := config.Load()
+            if cfg.APIKey != "" {
+                source = "api"
+            }
+        } else if source == "api" || (source == "auto") {
+            cfg, _ := config.Load()
+            if cfg.APIKey != "" {
+                client := api.NewClient(cfg.APIKey)
+                if client.SupportsIssueTemplates() { source = "api" }
+            }
+        }
         var raw string
+        var tplTitle string
         var err error
         if source == "api" {
             cfg, _ := config.Load()
             if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
             client := api.NewClient(cfg.APIKey)
-            // Try by id first
-            if tpl, e := client.IssueTemplateByID(args[0]); e == nil && tpl != nil {
-                raw = tpl.Description
-            } else {
-                if strings.TrimSpace(teamKey) == "" { return errors.New("--team is required to resolve template by name with --templates-source=api") }
-                t, errT := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
-                if errT != nil { return errT }
-                if t == nil { return fmt.Errorf("team with key %s not found", teamKey) }
-                tpl, errN := client.IssueTemplateByNameForTeam(t.ID, args[0])
-                if errN != nil { return errN }
-                if tpl == nil { return fmt.Errorf("template '%s' not found for team %s", args[0], teamKey) }
-                raw = tpl.Description
+            // Resolve team id
+            if strings.TrimSpace(teamKey) == "" { return errors.New("--team is required to resolve template by name with --templates-source=api") }
+            t, errT := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
+            if errT != nil { return errT }
+            if t == nil { return fmt.Errorf("team with key %s not found", teamKey) }
+
+            // Prefer listing team templates and matching by name (works across schema variants)
+            if items, e := client.ListIssueTemplatesForTeam(t.ID); e == nil && len(items) > 0 {
+                // Robust normalize: lowercase, remove spaces and punctuation
+                normalize := func(s string) string {
+                    s = strings.ToLower(strings.TrimSpace(s))
+                    var b strings.Builder
+                    for _, r := range s {
+                        if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') { b.WriteRune(r); continue }
+                    }
+                    return b.String()
+                }
+                name := strings.TrimSpace(args[0])
+                normName := normalize(name)
+                // Exact normalized match first, then contains
+                for _, it := range items {
+                    if normalize(it.Name) == normName {
+                        tplTitle = it.Name
+                        raw = it.Description
+                        break
+                    }
+                }
+                if strings.TrimSpace(raw) == "" {
+                    for _, it := range items {
+                        if strings.Contains(normalize(it.Name), normName) {
+                            tplTitle = it.Name
+                            raw = it.Description
+                            break
+                        }
+                    }
+                }
+                // If still empty, fetch full template by ID to retrieve description
+                if strings.TrimSpace(raw) == "" {
+                    for _, it := range items {
+                        if (tplTitle != "" && it.Name == tplTitle) || normalize(it.Name) == normName {
+                            if got, e := client.IssueTemplateByID(it.ID); e == nil && got != nil {
+                                if tplTitle == "" { tplTitle = got.Name }
+                                raw = got.Description
+                            }
+                            break
+                        }
+                    }
+                }
+                if debug {
+                    cand := make([]string, 0, len(items))
+                    for _, it := range items { cand = append(cand, it.Name) }
+                    _ = printer(cmd).PrintJSON(map[string]any{"debug": true, "teamId": t.ID, "candidates": cand, "requested": name})
+                }
+            }
+            // Fallback: try by id or name via direct resolvers if list path failed
+            if strings.TrimSpace(raw) == "" {
+                if tpl, e := client.IssueTemplateByID(args[0]); e == nil && tpl != nil {
+                    tplTitle = tpl.Name
+                    raw = tpl.Description
+                } else {
+                    tpl, errN := client.IssueTemplateByNameForTeam(t.ID, args[0])
+                    if errN == nil && tpl != nil {
+                        tplTitle = tpl.Name
+                        raw = tpl.Description
+                    }
+                }
+            }
+            if strings.TrimSpace(raw) == "" {
+                return fmt.Errorf("template '%s' not found for team %s", args[0], teamKey)
             }
         } else {
             raw, err = loadTemplateContent(args[0], override, baseOverride)
@@ -199,7 +423,12 @@ var issuesTemplatePreviewCmd = &cobra.Command{
         rendered, err := fillTemplate(raw, vars, false, false)
         if err != nil { return err }
         p := printer(cmd)
-        if p.JSONEnabled() { return p.PrintJSON(map[string]any{"content": rendered}) }
+        if p.JSONEnabled() {
+            // When using API source, include template title for clarity
+            if tplTitle != "" { return p.PrintJSON(map[string]any{"title": tplTitle, "description": rendered}) }
+            return p.PrintJSON(map[string]any{"description": rendered})
+        }
+        if tplTitle != "" { fmt.Printf("%s\n\n", tplTitle) }
         fmt.Println(rendered)
         return nil
     },
@@ -298,40 +527,64 @@ var issuesDoneCmd = &cobra.Command{
 var issuesCreateAdvCmd = &cobra.Command{
     Use:   "create --team <key> [flags]",
     Short: "Create a new issue",
-    Long: `Create a new issue. Provide --team (key like ENG). Other fields are prompted interactively by default.
+    Long: `🤖 AI-OPTIMIZED ISSUE CREATION
 
-Template-driven creation
- - Use --template <name|path|url> to load a markdown template. Named templates resolve from local dirs or a remote base URL
-   - Local search order: --templates-dir, $LINEAR_TEMPLATES_DIR, UserConfigDir/linear/templates, ~/.config/linear/templates
-   - Remote base: --templates-base-url or $LINEAR_TEMPLATES_BASE_URL. Names resolve to <base>/<name>.md
-- Title prefix: If the first line of the template is 'Title-Prefix: <prefix>' it will be prepended to --title automatically
-- Placeholders: Write {{KEY}} or {{KEY|Prompt text...}} anywhere in the template body
-  - Interactive is the default when using --template without --description; disable with --no-interactive
-  - With --interactive, you will be prompted for each missing KEY, showing the prompt text when provided
-  - Use --var KEY=VALUE (repeatable) and/or --vars-file file.json to prefill values
-  - Use --fail-on-missing to error out if any placeholders remain unresolved
-- Preview is automatic when prefill variables are provided (disable with --no-preview). Use -y/--yes to submit after preview
+Create fully structured Linear issues in a single command. Designed for AI agents, automation workflows, and programmatic issue management.
 
-Examples of placeholders
-  {{SUMMARY|One or two sentences describing what this issue is and why it matters.}}
-  {{CONTEXT|Relevant background, links, or reasoning behind the request.}}
-  {{REQUIREMENTS|List the key requirements.}}
-  {{DOD|Clear outcome that marks this task as complete.}}`,
-    Example: `  # Create a bug using a named template and team key
-  linear-cli issues create --title "Crash on save" --team ENG --template bug --label bug --priority 2
+✨ FEATURES:
+  • Single-command issue creation with template auto-discovery
+  • Automatic template synchronization and intelligent caching  
+  • Dynamic section filling that adapts to any team's templates
+  • Server-side template application for Linear consistency
+  • JSON output for programmatic integration
 
-  # Create a feature in a project by name using a template file (preview first)
-  linear-cli issues create --title "Dark mode" --project "Website" --template ~/.config/linear/templates/feature.md --preview
+🚀 AI AGENT WORKFLOW:
+  1. Create structured issues instantly (auto-discovery included):
+     linear-cli issues create --team TEAM --template "Template Name" --title "Title" \
+       --sections Summary="Brief description" Context="Background info"
+  
+  2. Discover templates (optional):
+     linear-cli issues template structure --team TEAM
+  
+  Example:
+    linear-cli issues template structure --team ENG
+    linear-cli issues template structure --team ENG --template "Feature Template"
+    linear-cli issues create --team ENG --template "Feature Template" --title "Add dark mode" \
+      --sections Summary="Add dark theme toggle" Context="Users need low-light option"
 
-  # Interactive walkthrough filling placeholders
-  linear-cli issues create --title "Dark mode" --team ENG --template feature -i
+👤 INTERACTIVE WORKFLOW:
+  1. Run: linear-cli issues create --team TEAM
+  2. Select issue type (Feature/Bug/Spike) 
+  3. Enter title (auto-prefixed: "Feat:", "Bug:", "Spike:")
+  4. Fill template sections interactively
 
-  # Provide variables explicitly (no prompts)
-  linear-cli issues create --title "Dark mode" --team ENG --template feature \
-    --var SUMMARY="Add dark theme for night-time usability" \
-    --var CONTEXT="Many users work in low-light settings" \
-    --var REQUIREMENTS=$'Toggle in settings\\nAuto-detect system theme' \
-    --var DOD="All screens match dark palette; accessibility checks pass"`,
+🔧 TECHNICAL DETAILS:
+  - Templates applied server-side by Linear's API (ensures consistency)
+  - Auto-detects issue type from title keywords if --type not specified
+  - Default priority: Medium (3), Default state: Todo/Backlog
+  - Supports any team's template structure dynamically
+
+🚀 SETUP FOR AI AGENTS:
+  1. Authenticate: linear-cli auth login
+  2. Test connection: linear-cli auth status  
+  3. Discover team templates: linear-cli issues template structure --team TEAM
+  4. Get template structure: linear-cli issues template structure --team TEAM --template "Name"
+  5. Create structured issues: Use --template and --sections flags
+
+The CLI automatically handles template application, labeling, and state management to ensure 
+issues are created exactly as if done through Linear's web interface.`,
+    Example: `  # AI Agent: Discover available templates
+  linear-cli issues template structure --team ENG
+  
+  # AI Agent: Get specific template structure  
+  linear-cli issues template structure --team ENG --template "Feature Template"
+  
+  # AI Agent: Create structured issue
+  linear-cli issues create --team ENG --template "Feature Template" --title "Add dark mode" \
+    --sections Summary="Add dark theme toggle" Context="Users need low-light option"
+  
+  # Interactive creation
+  linear-cli issues create --team ENG`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		cfg, _ := config.Load()
 		if cfg.APIKey == "" { return errors.New("not authenticated. run 'linear-cli auth login'") }
@@ -343,6 +596,9 @@ Examples of placeholders
         templateID, _ := cmd.Flags().GetString("template-id")
         interactiveFlag, _ := cmd.Flags().GetBool("interactive")
         noInteractive, _ := cmd.Flags().GetBool("no-interactive")
+        
+        // AI-friendly template section flags  
+        sections, _ := cmd.Flags().GetStringToString("sections")
         previewFlag, _ := cmd.Flags().GetBool("preview")
         noPreview, _ := cmd.Flags().GetBool("no-preview")
         yes, _ := cmd.Flags().GetBool("yes")
@@ -361,18 +617,32 @@ Examples of placeholders
         // Compute default behavior: interactive by default with templates unless explicitly disabled.
         // If prefill vars are provided, default to preview unless explicitly disabled.
         varsProvided := len(varsKVs) > 0 || strings.TrimSpace(varsFile) != ""
-        // Interactive is the default unless explicitly disabled
+        // Determine if this is AI-friendly mode
+        isAIMode := strings.TrimSpace(templateName) != "" && len(sections) > 0 && strings.TrimSpace(title) != ""
+        
+        // Interactive is the default unless explicitly disabled or in AI mode
         interactive := interactiveFlag
-        if !noInteractive && !cmd.Flags().Changed("interactive") {
+        if !noInteractive && !cmd.Flags().Changed("interactive") && !isAIMode {
             interactive = true
+        } else if isAIMode {
+            interactive = false
         }
         preview := previewFlag
         if varsProvided && !noPreview && !cmd.Flags().Changed("preview") {
             preview = true
         }
 
+        // AI-FRIENDLY MODE: Seamless single-command creation
+        if isAIMode {
+            if strings.TrimSpace(teamKey) == "" {
+                return errors.New("--team is required for AI-friendly mode")
+            }
+            
+            return createIssueAIFriendly(client, teamKey, templateName, title, sections, cmd)
+        }
+
         // If user requested interactive but provided no template or description, offer to pick a template
-        if !interactive && strings.TrimSpace(templateName) == "" && strings.TrimSpace(description) == "" {
+        if interactive && strings.TrimSpace(templateName) == "" && strings.TrimSpace(description) == "" {
             tmpl, pickErr := interactivePickTemplate(cmd, client, teamKey)
             if pickErr == nil && strings.TrimSpace(tmpl) != "" { templateName = tmpl }
         }
@@ -392,7 +662,8 @@ Examples of placeholders
         }
 
         // Load template and optionally fill it
-        if strings.TrimSpace(description) == "" && strings.TrimSpace(templateName) != "" {
+        // For interactive runs, defer template loading until after type selection so we can auto-pick by kind
+        if !interactive && strings.TrimSpace(description) == "" && strings.TrimSpace(templateName) != "" {
             var tplContent string
             var err error
             if source == "api" {
@@ -425,12 +696,14 @@ Examples of placeholders
             if err != nil { return err }
             description, err = fillTemplate(tplContent, vars, interactive, failOnMissing)
             if err != nil { return err }
+            // If template had no placeholders and description is still empty, prompt by sections
+            if interactive && strings.TrimSpace(description) == "" && !hasTemplatePlaceholders(tplContent) {
+                description = promptSectionsFromTemplate(tplContent)
+            }
         }
 
-        // As a final guard in interactive mode, if description is still empty, prompt for a multiline description
-        if interactive && strings.TrimSpace(description) == "" {
-            description = promptMultilineDescription()
-        }
+        // (moved) Description prompting happens later within the interactive walkthrough,
+        // after type/template/title so it aligns with the intended flow.
         var projectID string
         var teamID string
         if project != "" {
@@ -440,7 +713,7 @@ Examples of placeholders
             projectID = pr.ID
             if pr.TeamID != "" { teamID = pr.TeamID }
         }
-        if teamKey != "" {
+        if teamKey != "" && teamID == "" {
             t, err := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
             if err != nil { return err }
             if t == nil { return fmt.Errorf("team with key %s not found", teamKey) }
@@ -463,6 +736,11 @@ Examples of placeholders
 		}
         var prioPtr *int
         if cmd.Flags().Changed("priority") { prioPtr = &priority }
+        // Load last-used preferences for this team as defaults where applicable
+        teamKeyNorm := strings.ToUpper(strings.TrimSpace(teamKey))
+        tp := cfg.TeamPrefs[teamKeyNorm]
+        // Do not auto-apply Urgent (1) by default; prefer 2 unless explicitly set this run
+        if prioPtr == nil && tp.LastPriority >= 2 { v := tp.LastPriority; prioPtr = &v }
         if preview && strings.TrimSpace(description) != "" {
             // Show the rendered description and exit
             p := printer(cmd)
@@ -483,130 +761,154 @@ Examples of placeholders
                 return nil
             }
         }
-        // If interactive and still missing, walk through all fields
+        // Track issue type for template selection
+        var kind string
+        
+        // If interactive and still missing, walk through all fields in this order to match the desired UX
         if interactive {
-            // Title
+            // Kind first, so we can apply prefixes and pick templates by type
+            kind = promptChoiceStrict("Issue type", []string{"Feature", "Bug", "Spike"}, false)
+            // Title next (so we can apply any template/type prefix consistently)
             if strings.TrimSpace(title) == "" { title = promptLine("Title: ") }
-            // Kind -> optional auto-label mapping
-            kind := promptChoiceStrict("Issue type", []string{"Feature", "Bug", "Spike"}, false)
-            // Attempt to auto-load template by kind if no description/template provided
-            if strings.TrimSpace(description) == "" && strings.TrimSpace(templateName) == "" {
-                preferAPI := client.SupportsIssueTemplates()
-                if tplContent, ok := autoLoadTemplateByKind(kind, cmd, client, teamID); ok {
-                    if prefix, body := parseTitlePrefixAndStrip(tplContent); prefix != "" {
-                        if !strings.HasPrefix(strings.TrimSpace(title), prefix) { title = strings.TrimSpace(prefix + " " + title) }
-                        tplContent = body
-                    }
-                    vars, _ := gatherVars(varsKVs, varsFile)
-                    if rendered, err := fillTemplate(tplContent, vars, true, false); err == nil { description = rendered }
-                } else {
-                    // Fallback: allow user to pick a template interactively
-                    if preferAPI { _ = cmd.Flags().Set("templates-source", "api") }
-                    if tmpl, err := interactivePickTemplate(cmd, client, teamKey); err == nil && strings.TrimSpace(tmpl) != "" {
-                        templatesDir, _ := cmd.Flags().GetString("templates-dir")
-                        baseOverride, _ := cmd.Flags().GetString("templates-base-url")
-                        if raw, err := loadTemplateContent(tmpl, templatesDir, baseOverride); err == nil {
-                            if prefix, body := parseTitlePrefixAndStrip(raw); prefix != "" {
-                                if !strings.HasPrefix(strings.TrimSpace(title), prefix) { title = strings.TrimSpace(prefix + " " + title) }
-                                raw = body
-                            }
-                            vars, _ := gatherVars(varsKVs, varsFile)
-                            if rendered, err := fillTemplate(raw, vars, true, false); err == nil { description = rendered }
-                        }
-                    }
-                }
-            }
-            // Offer to add a label matching the kind if available
             if strings.TrimSpace(kind) != "" {
-                if labels, err := client.ListIssueLabels(200); err == nil && len(labels) > 0 {
-                    var kindLabelID string
-                    for _, lb := range labels { if strings.EqualFold(lb.Name, kind) { kindLabelID = lb.ID; break } }
-                    if kindLabelID != "" { labelIDs = append(labelIDs, kindLabelID) }
+                var pref string
+                switch strings.ToLower(kind) {
+                case "feature": pref = "Feat:"
+                case "bug": pref = "Bug:"
+                case "spike": pref = "Spike:"
+                }
+                if pref != "" && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), strings.ToLower(pref)) {
+                    title = strings.TrimSpace(pref + " " + title)
                 }
             }
-            // Priority
-            if prioPtr == nil {
-                prioStr := promptChoice("Priority", []string{"1", "2", "3", "4"})
-                if v, err := strconv.Atoi(prioStr); err == nil { prioPtr = &v }
-            }
-            // Assignee from team members
-            if assigneeID == "" && teamID != "" {
-                members, _ := client.TeamMembers(teamID)
-                if len(members) > 0 {
-                    // Build options including (me)
-                    var me *api.Viewer
-                    if v, err := client.Viewer(); err == nil { me = v }
-                    opts := []string{"(none)"}
-                    idxByName := map[string]int{}
-                    if me != nil { opts = append(opts, fmt.Sprintf("(me) %s", me.Name)) }
-                    for i, u := range members { opts = append(opts, u.Name); idxByName[u.Name] = i }
-                    pick := promptChoiceStrict("Assignee", opts, true)
-                    if pick == "(none)" {
-                        // leave empty
-                    } else if me != nil && (strings.EqualFold(pick, "(me)") || strings.Contains(pick, me.Name)) {
-                        assigneeID = me.ID
+            
+            // Interactive section filling for template-based issues
+            if client.SupportsIssueCreateTemplateId() && strings.TrimSpace(kind) != "" {
+                // Find the template for this issue type
+                if tpl, _ := client.FindTemplateForTeamByKeywords(teamID, []string{kind, kind + " template"}); tpl != nil {
+                    // Create issue with server-side template first to get the structure
+                    var chosenStateID string
+                    if states, _ := client.TeamStates(teamID); len(states) > 0 {
+                        idByName := map[string]string{}
+                        for _, s := range states { idByName[s.Name] = s.ID }
+                        if id, ok := idByName["Todo"]; ok { chosenStateID = id } else if id, ok := idByName["Backlog"]; ok { chosenStateID = id } else { chosenStateID = states[0].ID }
+                    }
+                    
+                    // Set default priority to Medium (3)
+                    if prioPtr == nil { v := 3; prioPtr = &v }
+                    
+                    // Create with template to get structure
+                    tempIssue, err := client.CreateIssueAdvanced(api.IssueCreateInput{
+                        ProjectID: projectID, 
+                        TeamID: teamID, 
+                        StateID: chosenStateID, 
+                        TemplateID: tpl.ID, 
+                        Title: title, 
+                        AssigneeID: assigneeID, 
+                        LabelIDs: labelIDs, 
+                        Priority: prioPtr,
+                    })
+                    if err != nil { return err }
+                    
+                    // If user provided description, intelligently fill template sections
+                    var filledDescription string
+                    if strings.TrimSpace(description) != "" {
+                        filledDescription = fillTemplateFromDescription(tempIssue.Description, description)
                     } else {
-                        if i, ok := idxByName[pick]; ok { assigneeID = members[i].ID }
+                        // Interactive prompting for each section
+                        filledDescription = promptTemplateInteractively(tempIssue.Description)
                     }
+                    
+                    // Update the issue with filled content
+                    if filledDescription != tempIssue.Description {
+                        updatedIssue, err := client.UpdateIssue(tempIssue.ID, "", filledDescription)
+                        if err != nil { return err }
+                        tempIssue = updatedIssue
+                    }
+                    
+                    p := printer(cmd)
+                    if p.JSONEnabled() { return p.PrintJSON(tempIssue) }
+                    fmt.Printf("Created %s: %s\n", tempIssue.Identifier, tempIssue.URL)
+                    return nil
                 }
             }
-            // Project picker (from API, filtered by team)
-            if projectID == "" {
-                var projects []api.Project
-                if teamID != "" { projects, _ = client.ListProjectsByTeam(teamID, 200) }
-                if len(projects) == 0 { projects, _ = client.ListProjectsAll(200) }
-                if len(projects) > 0 {
-                    opts := make([]string, len(projects)+1)
-                    opts[0] = "(none)"
-                    for i, p := range projects { opts[i+1] = p.Name }
-                    pick := promptChoice("Project", opts)
-                    if pick != "(none)" {
-                        for i, p := range projects { if p.Name == pick { projectID = projects[i].ID; break } }
-                    }
-                } else {
-                    // fallback text entry
-                    pName := strings.TrimSpace(promptLine("Project (leave blank for none): "))
-                    if pName != "" { if pr, err := client.ResolveProject(pName); err == nil && pr != nil { projectID = pr.ID } }
-                }
-            }
-            // Labels multi-select
-            if labels, err := client.ListIssueLabels(200); err == nil && len(labels) > 0 {
-                names := make([]string, len(labels))
-                for i, lb := range labels { names[i] = lb.Name }
-                picks := promptMultiSelect("Labels (comma-separated numbers or names, blank to skip)", names)
-                if len(picks) > 0 {
-                    // merge unique
-                    existing := map[string]struct{}{}
-                    for _, id := range labelIDs { existing[id] = struct{}{} }
-                    for _, pick := range picks {
-                        // match by name to id
-                        for _, lb := range labels { if strings.EqualFold(lb.Name, pick) { if _, ok := existing[lb.ID]; !ok { labelIDs = append(labelIDs, lb.ID); existing[lb.ID] = struct{}{} } } }
-                    }
-                }
-            }
+            
+            // Set default priority to Medium (3) without prompting
+            if prioPtr == nil { v := 3; prioPtr = &v }
 
-            // Ensure description
-            if strings.TrimSpace(description) == "" { description = promptMultilineDescription() }
-            // Optional editor for final tweaks
-            if promptYesNo("Open in editor to finalize description? (y/N): ", false) {
-                if edited, err := openInEditor(description); err == nil { description = edited }
+            // Optional editor for final tweaks when a description exists
+            if strings.TrimSpace(description) != "" {
+                if promptYesNo("Open in editor to finalize description? (y/N): ", false) {
+                    if edited, err := openInEditor(description); err == nil { description = edited }
+                }
             }
         }
 
-        // Final: create (include state if chosen earlier)
-        // Re-prompt state if interactive and not set
+        // Persist last selections per team (best effort)
+        if teamKey != "" {
+            if cfg.TeamPrefs == nil { cfg.TeamPrefs = map[string]config.TeamPrefs{} }
+            tp := cfg.TeamPrefs[strings.ToUpper(strings.TrimSpace(teamKey))]
+            if projectID != "" { tp.LastProjectID = projectID }
+            if assigneeID != "" { tp.LastAssigneeID = assigneeID }
+            if prioPtr != nil { tp.LastPriority = *prioPtr }
+            if len(labelIDs) > 0 { tp.LastLabels = labelIDs }
+            if strings.TrimSpace(templateName) != "" { tp.LastTemplate = templateName }
+            cfg.TeamPrefs[strings.ToUpper(strings.TrimSpace(teamKey))] = tp
+            _ = config.Save(cfg)
+        }
+
+        // Final: create with server-side template application and silent state defaults
         var chosenStateID string
-        if interactive {
-            states, _ := client.TeamStates(teamID)
-            if len(states) > 0 {
-                opts := make([]string, len(states))
-                idByName := map[string]string{}
-                for i, s := range states { opts[i] = s.Name; idByName[s.Name] = s.ID }
-                pick := promptChoice("State", opts)
-                if id, ok := idByName[pick]; ok { chosenStateID = id }
+        if states, _ := client.TeamStates(teamID); len(states) > 0 {
+            idByName := map[string]string{}
+            for _, s := range states { idByName[s.Name] = s.ID }
+            if id, ok := idByName["Todo"]; ok { chosenStateID = id } else if id, ok := idByName["Backlog"]; ok { chosenStateID = id } else { chosenStateID = states[0].ID }
+        }
+        
+        // AI-friendly mode: use --template and --sections to create structured issues
+        if !interactive && strings.TrimSpace(templateName) != "" && len(sections) > 0 {
+            // Find template by name
+            if tpl, _ := client.IssueTemplateByNameForTeam(teamID, templateName); tpl != nil {
+                // Create issue with template to get structure
+                tempIssue, err := client.CreateIssueAdvanced(api.IssueCreateInput{
+                    ProjectID: projectID, 
+                    TeamID: teamID, 
+                    StateID: chosenStateID, 
+                    TemplateID: tpl.ID, 
+                    Title: title, 
+                    AssigneeID: assigneeID, 
+                    LabelIDs: labelIDs, 
+                    Priority: prioPtr,
+                })
+                if err != nil { return err }
+                
+                // Fill template sections dynamically
+                filledDescription := fillTemplateSectionsDynamically(tempIssue.Description, sections)
+                
+                // Update the issue with filled content
+                if filledDescription != tempIssue.Description {
+                    updatedIssue, err := client.UpdateIssue(tempIssue.ID, "", filledDescription)
+                    if err != nil { return err }
+                    tempIssue = updatedIssue
+                }
+                
+                p := printer(cmd)
+                if p.JSONEnabled() { return p.PrintJSON(tempIssue) }
+                fmt.Printf("Created %s: %s\n", tempIssue.Identifier, tempIssue.URL)
+                return nil
             }
         }
-        created, err := client.CreateIssueAdvanced(api.IssueCreateInput{ProjectID: projectID, TeamID: teamID, StateID: chosenStateID, Title: title, Description: description, AssigneeID: assigneeID, LabelIDs: labelIDs, Priority: prioPtr})
+        
+        // For non-interactive flows, use server-side template application if no description provided
+        var templateIDForServer string
+        if !interactive && client.SupportsIssueCreateTemplateId() && strings.TrimSpace(description) == "" && strings.TrimSpace(templateName) != "" {
+            // Use specified template name
+            if tpl, _ := client.IssueTemplateByNameForTeam(teamID, templateName); tpl != nil {
+                templateIDForServer = tpl.ID
+            }
+        }
+        
+        created, err := client.CreateIssueAdvanced(api.IssueCreateInput{ProjectID: projectID, TeamID: teamID, StateID: chosenStateID, TemplateID: templateIDForServer, Title: title, Description: description, AssigneeID: assigneeID, LabelIDs: labelIDs, Priority: prioPtr})
 		if err != nil { return err }
 		p := printer(cmd)
 		if p.JSONEnabled() { return p.PrintJSON(created) }
@@ -626,8 +928,7 @@ func init() {
     issuesCmd.AddCommand(issuesDoingCmd)
     issuesCmd.AddCommand(issuesDoneCmd)
     issuesCmd.AddCommand(issuesTemplateCmd)
-    issuesTemplateCmd.AddCommand(issuesTemplateListCmd)
-    issuesTemplateCmd.AddCommand(issuesTemplatePreviewCmd)
+    issuesTemplateCmd.AddCommand(issuesTemplateStructureCmd)
 
     issuesListAdvCmd.Flags().Int("limit", 10, "Maximum number of issues to list")
     issuesListAdvCmd.Flags().String("project", "", "Filter by project name or id")
@@ -650,6 +951,9 @@ func init() {
     issuesCreateAdvCmd.Flags().String("template-id", "", "Linear API template id to use for server-side creation (requires --team)")
     issuesCreateAdvCmd.Flags().BoolP("interactive", "i", false, "Interactive walkthrough (default: on; disable with --no-interactive)")
     issuesCreateAdvCmd.Flags().Bool("no-interactive", false, "Disable interactive walkthrough")
+    
+    // AI-friendly template section flags
+    issuesCreateAdvCmd.Flags().StringToString("sections", nil, "Template sections as key=value pairs (e.g. --sections Summary='Brief description' Context='Background info')")
     issuesCreateAdvCmd.Flags().Bool("preview", false, "Preview the rendered issue and exit without creating (default: on when --var/--vars-file provided)")
     issuesCreateAdvCmd.Flags().Bool("no-preview", false, "Disable automatic preview when vars are provided")
     issuesCreateAdvCmd.Flags().BoolP("yes", "y", false, "Proceed with creation after preview without prompting")
@@ -665,16 +969,8 @@ func init() {
     issuesCreateAdvCmd.Flags().String("templates-base-url", "", "Remote templates base URL (fallback: $LINEAR_TEMPLATES_BASE_URL). Names resolve to <base>/<name>.md")
     issuesCreateAdvCmd.Flags().String("templates-source", "auto", "Template source: auto|local|remote|api")
     issuesViewCmd.Flags().Int("comments", 0, "Include up to N comments")
-    issuesTemplatePreviewCmd.Flags().StringArray("var", nil, "Template variable assignment key=value (repeatable)")
-    issuesTemplatePreviewCmd.Flags().String("vars-file", "", "JSON file with string key-value pairs for template variables")
-    issuesTemplatePreviewCmd.Flags().String("templates-dir", "", "Override templates directory (default search: $LINEAR_TEMPLATES_DIR, UserConfigDir/linear/templates, ~/.config/linear/templates)")
-    issuesTemplatePreviewCmd.Flags().String("templates-base-url", "", "Remote templates base URL (fallback: $LINEAR_TEMPLATES_BASE_URL). Names resolve to <base>/<name>.md")
-    issuesTemplatePreviewCmd.Flags().String("templates-source", "auto", "Template source: auto|local|remote|api")
-    issuesTemplatePreviewCmd.Flags().String("team", "", "Team key when using --templates-source=api")
-    issuesTemplateListCmd.Flags().String("templates-dir", "", "Override templates directory (default search: $LINEAR_TEMPLATES_DIR, UserConfigDir/linear/templates, ~/.config/linear/templates)")
-    issuesTemplateListCmd.Flags().String("templates-base-url", "", "Remote templates base URL (fallback: $LINEAR_TEMPLATES_BASE_URL). Listing reads <base>/index.json")
-    issuesTemplateListCmd.Flags().String("templates-source", "auto", "Template source: auto|local|remote|api")
-    issuesTemplateListCmd.Flags().String("team", "", "Team key when using --templates-source=api")
+    issuesTemplateStructureCmd.Flags().String("team", "", "Team key (required)")
+    issuesTemplateStructureCmd.Flags().String("template", "", "Template name (optional - if not provided, lists all templates)")
 }
 
 // loadTemplateContent resolves a template by name, path, or URL.
@@ -1021,6 +1317,84 @@ func fillTemplate(tpl string, vars map[string]string, interactive bool, failOnMi
     return content, nil
 }
 
+// hasTemplatePlaceholders reports whether the template contains any {{KEY}} tokens
+func hasTemplatePlaceholders(tpl string) bool {
+    re := regexp.MustCompile(`\{\{\s*([A-Za-z0-9_\-]+)(?:\|[^}]+)?\s*\}\}`)
+    return re.MatchString(tpl)
+}
+
+// promptSectionsFromTemplate extracts markdown-style sections (lines ending with ':' or '## Heading')
+// and prompts the user to fill each one, composing a structured description.
+func promptSectionsFromTemplate(tpl string) string {
+    lines := strings.Split(tpl, "\n")
+    type section struct{ title string }
+    var sections []section
+    for _, ln := range lines {
+        s := strings.TrimSpace(ln)
+        if s == "" { continue }
+        // Headings like "Summary" or "Context" on their own line
+        // or markdown headings
+        if s == strings.ToUpper(string(s[0]))+s[1:] && !strings.Contains(s, " ") == false { /* passthrough */ }
+        if strings.HasPrefix(s, "## ") || strings.HasSuffix(s, ":") || isStandaloneHeading(s) {
+            title := strings.TrimSuffix(strings.TrimSpace(strings.TrimPrefix(s, "## ")), ":")
+            if title != "" { sections = append(sections, section{title: title}) }
+        }
+    }
+    if len(sections) == 0 {
+        return promptMultilineBlock("Description")
+    }
+    var b strings.Builder
+    for i, sec := range sections {
+        if i > 0 { b.WriteString("\n\n") }
+        b.WriteString("## ")
+        b.WriteString(sec.title)
+        b.WriteString("\n")
+        b.WriteString(promptMultilineBlock(sec.title))
+    }
+    return strings.TrimSpace(b.String())
+}
+
+// buildDescriptionFromTemplate chooses the best interactive strategy to produce a description
+// from a template: placeholder prompting when tokens exist, otherwise section-by-section prompts.
+func buildDescriptionFromTemplate(tpl string, vars map[string]string, interactive bool, failOnMissing bool) (string, error) {
+    if strings.TrimSpace(tpl) == "" {
+        if interactive { return promptMultilineBlock("Description"), nil }
+        return "", nil
+    }
+    if hasTemplatePlaceholders(tpl) {
+        return fillTemplate(tpl, vars, interactive, failOnMissing)
+    }
+    if interactive {
+        return promptSectionsFromTemplate(tpl), nil
+    }
+    // Non-interactive, no placeholders: return raw body
+    return tpl, nil
+}
+
+// isStandaloneHeading heuristically detects single-line headings like "Summary", "Context",
+// "Requirements", "Definition of Done".
+func isStandaloneHeading(s string) bool {
+    ss := strings.TrimSpace(s)
+    if strings.Contains(ss, " ") { return false }
+    if len(ss) < 3 { return false }
+    // Title-case word without trailing punctuation
+    return strings.ToUpper(string(ss[0]))+ss[1:] == ss && !strings.HasSuffix(ss, ":")
+}
+
+// promptMultilineBlock prompts the user for a multi-line block with a clear label; end on empty line.
+func promptMultilineBlock(label string) string {
+    fmt.Printf("%s (finish with an empty line):\n", label)
+    rdr := bufio.NewReader(os.Stdin)
+    var lines []string
+    for {
+        line, _ := rdr.ReadString('\n')
+        line = strings.TrimRight(line, "\r\n")
+        if strings.TrimSpace(line) == "" { break }
+        lines = append(lines, line)
+    }
+    return strings.TrimSpace(strings.Join(lines, "\n"))
+}
+
 // parseTitlePrefixAndStrip allows templates to declare a title prefix on the first line like:
 // Title-Prefix: Feat:
 // The line is removed from the template body and the prefix returned.
@@ -1058,4 +1432,300 @@ func gatherVars(kvs []string, file string) (map[string]string, error) {
         for k, v := range m { out[k] = v }
     }
     return out, nil
+}
+
+// fillTemplateFromDescription intelligently fills template sections from a provided description
+func fillTemplateFromDescription(templateContent, userDescription string) string {
+	// Parse the template to find sections
+	sections := parseTemplateSections(templateContent)
+	if len(sections) == 0 {
+		return userDescription // No template structure, just use user description
+	}
+	
+	// Smart filling: try to extract relevant parts from user description
+	filled := templateContent
+	
+	// Simple heuristic: use the first sentence(s) for Summary
+	sentences := strings.Split(strings.TrimSpace(userDescription), ". ")
+	if len(sentences) > 0 {
+		summary := sentences[0]
+		if !strings.HasSuffix(summary, ".") { summary += "." }
+		filled = strings.Replace(filled, "One or two sentences describing what this issue is and why it matters.", summary, 1)
+	}
+	
+	// Use remaining content for Context if we have more than one sentence
+	if len(sentences) > 1 {
+		context := strings.Join(sentences[1:], ". ")
+		if strings.TrimSpace(context) != "" {
+			filled = strings.Replace(filled, "Relevant background, links, or reasoning behind the request.", context, 1)
+		}
+	}
+	
+	// For Requirements and DOD, provide helpful defaults that can be edited
+	filled = strings.Replace(filled, "- [ ] Requirement 1\n- [ ] Requirement 2\n- [ ] (Optional) Stretch goal", 
+		"- [ ] Implement core functionality\n- [ ] Add appropriate tests\n- [ ] Update documentation", 1)
+	
+	filled = strings.Replace(filled, "Clear outcome that marks this task as complete.", 
+		"Feature is implemented, tested, and ready for production use.", 1)
+	
+	return filled
+}
+
+// promptTemplateInteractively prompts user to fill each template section
+func promptTemplateInteractively(templateContent string) string {
+	sections := parseTemplateSections(templateContent)
+	if len(sections) == 0 {
+		// No structured template, just prompt for description
+		return promptMultilineBlock("Description")
+	}
+	
+	filled := templateContent
+	
+	// Prompt for each section
+	if strings.Contains(filled, "One or two sentences describing what this issue is and why it matters.") {
+		summary := promptLine("Summary (1-2 sentences): ")
+		if strings.TrimSpace(summary) != "" {
+			filled = strings.Replace(filled, "One or two sentences describing what this issue is and why it matters.", summary, 1)
+		}
+	}
+	
+	if strings.Contains(filled, "Relevant background, links, or reasoning behind the request.") {
+		context := promptMultilineBlock("Context")
+		if strings.TrimSpace(context) != "" {
+			filled = strings.Replace(filled, "Relevant background, links, or reasoning behind the request.", context, 1)
+		}
+	}
+	
+	if strings.Contains(filled, "- [ ] Requirement 1\n- [ ] Requirement 2\n- [ ] (Optional) Stretch goal") {
+		requirements := promptMultilineBlock("Requirements (one per line, use - [ ] format)")
+		if strings.TrimSpace(requirements) != "" {
+			filled = strings.Replace(filled, "- [ ] Requirement 1\n- [ ] Requirement 2\n- [ ] (Optional) Stretch goal", requirements, 1)
+		}
+	}
+	
+	if strings.Contains(filled, "Clear outcome that marks this task as complete.") {
+		dod := promptLine("Definition of Done: ")
+		if strings.TrimSpace(dod) != "" {
+			filled = strings.Replace(filled, "Clear outcome that marks this task as complete.", dod, 1)
+		}
+	}
+	
+	return filled
+}
+
+// parseTemplateSections extracts section headers from template content
+func parseTemplateSections(content string) []string {
+	var sections []string
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## ") {
+			sections = append(sections, strings.TrimPrefix(strings.TrimPrefix(line, "### "), "## "))
+		}
+	}
+	return sections
+}
+
+// fillTemplateSectionsDynamically fills template sections using provided key-value pairs
+func fillTemplateSectionsDynamically(templateContent string, sections map[string]string) string {
+	filled := templateContent
+	
+	// Process each section that we have content for
+	for sectionName, content := range sections {
+		filled = fillSingleSection(filled, sectionName, content)
+	}
+	
+	return filled
+}
+
+// getSectionKeys returns the keys from a sections map
+func getSectionKeys(sections map[string]string) []string {
+	keys := make([]string, 0, len(sections))
+	for key := range sections {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// fillSingleSection fills a single section in the template content
+func fillSingleSection(templateContent, sectionName, content string) string {
+	lines := strings.Split(templateContent, "\n")
+	
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		// Check if this is the section header we're looking for
+		if strings.HasPrefix(line, "### ") || strings.HasPrefix(line, "## ") {
+			headerSectionName := strings.TrimPrefix(strings.TrimPrefix(line, "### "), "## ")
+			
+			if headerSectionName == sectionName {
+				// Find the next section or end of content
+				nextSectionIdx := len(lines)
+				for j := i + 1; j < len(lines); j++ {
+					nextLine := strings.TrimSpace(lines[j])
+					if strings.HasPrefix(nextLine, "### ") || strings.HasPrefix(nextLine, "## ") {
+						nextSectionIdx = j
+						break
+					}
+				}
+				
+				// Replace the content between this section and the next
+				newLines := make([]string, 0, len(lines))
+				newLines = append(newLines, lines[:i+1]...) // Include section header
+				newLines = append(newLines, "")              // Empty line
+				newLines = append(newLines, content)         // New content
+				newLines = append(newLines, "")              // Empty line
+				newLines = append(newLines, lines[nextSectionIdx:]...) // Rest of content
+				
+				return strings.Join(newLines, "\n")
+			}
+		}
+	}
+	
+	// Section not found, return unchanged
+	return templateContent
+}
+
+// buildExampleSections creates an example --sections flag value from section names
+func buildExampleSections(sections []string) string {
+	if len(sections) == 0 { return "" }
+	examples := make([]string, 0, len(sections))
+	for _, section := range sections {
+		examples = append(examples, fmt.Sprintf("%s='Your %s content'", section, strings.ToLower(section)))
+	}
+	return strings.Join(examples, " ")
+}
+
+// createIssueAIFriendly handles AI-optimized issue creation with auto-discovery and seamless workflow
+func createIssueAIFriendly(client *api.Client, teamKey, templateName, title string, sections map[string]string, cmd *cobra.Command) error {
+	// Get team info
+	team, err := client.TeamByKey(strings.ToUpper(strings.TrimSpace(teamKey)))
+	if err != nil {
+		return fmt.Errorf("failed to find team %s: %w", teamKey, err)
+	}
+	if team == nil {
+		return fmt.Errorf("team with key %s not found", teamKey)
+	}
+
+	// Try to get template info from local cache first
+	templateInfo, _, err := GetLocalTemplate(teamKey, templateName)
+	if err != nil {
+		// Local template not found - auto-sync and try again
+		fmt.Printf("🔄 Template not cached locally, auto-syncing templates for team %s...\n", teamKey)
+		
+		// Get templates directory
+		templatesDir, err := getTemplatesDir()
+		if err != nil {
+			return fmt.Errorf("failed to access templates directory: %w", err)
+		}
+
+		// Load or create metadata
+		metadata, err := loadTemplateMetadata(templatesDir)
+		if err != nil {
+			metadata = &TemplateMetadata{
+				Templates: make(map[string]TeamTemplates),
+			}
+		}
+
+		// Auto-sync this team's templates
+		syncResult, err := syncTeamTemplatesIntelligent(client, *team, templatesDir, metadata)
+		if err != nil {
+			return fmt.Errorf("failed to auto-sync templates: %w", err)
+		}
+
+		// Save metadata
+		metadata.LastSync = time.Now()
+		_ = saveTemplateMetadata(templatesDir, metadata) // Best effort
+
+		if syncResult.SkipReason != "" {
+			fmt.Printf("   %s\n", syncResult.SkipReason)
+		} else {
+			fmt.Printf("   %s\n", syncResult.SyncSummary)
+		}
+
+		// Try to get template info again
+		templateInfo, _, err = GetLocalTemplate(teamKey, templateName)
+		if err != nil {
+			// Still not found - provide helpful error with available templates
+			templates, listErr := GetLocalTemplatesForTeam(teamKey)
+			if listErr != nil {
+				return fmt.Errorf("template '%s' not found and failed to list available templates: %w", templateName, err)
+			}
+			
+			availableNames := make([]string, len(templates))
+			for i, t := range templates {
+				availableNames[i] = t.Name
+			}
+			
+			return fmt.Errorf("template '%s' not found for team %s. Available templates: %s", 
+				templateName, teamKey, strings.Join(availableNames, ", "))
+		}
+	}
+
+	fmt.Printf("📋 Using template: %s (ID: %s)\n", templateInfo.Name, templateInfo.ID)
+
+	// Pre-fill template sections using local template content
+	var prefilledDescription string
+	if len(sections) > 0 {
+		fmt.Printf("📝 Pre-filling %d template sections...\n", len(sections))
+		
+		// Get the local template content and fill sections
+		_, localTemplateContent, err := GetLocalTemplate(teamKey, templateName)
+		if err != nil {
+			return fmt.Errorf("failed to get local template content: %w", err)
+		}
+		
+		prefilledDescription = fillTemplateSectionsDynamically(localTemplateContent, sections)
+		fmt.Printf("   ✓ Template sections pre-filled\n")
+	}
+
+	// Create issue with server-side template application and pre-filled description
+	createInput := api.IssueCreateInput{
+		TeamID:     team.ID,
+		TemplateID: templateInfo.ID,
+		Title:      title,
+		Priority:   &[]int{3}[0], // Default to Medium priority
+	}
+	
+	// If we have pre-filled content, use it as the description
+	if prefilledDescription != "" {
+		createInput.Description = prefilledDescription
+	}
+
+	created, err := client.CreateIssueAdvanced(createInput)
+	if err != nil {
+		return fmt.Errorf("failed to create issue: %w", err)
+	}
+
+	fmt.Printf("✅ Created issue: %s\n", created.Identifier)
+	if len(sections) > 0 {
+		fmt.Printf("   ✓ %d template sections filled\n", len(sections))
+	}
+
+	// Output result
+	p := printer(cmd)
+	if p.JSONEnabled() {
+		return p.PrintJSON(map[string]interface{}{
+			"success":    true,
+			"id":         created.ID,
+			"identifier": created.Identifier,
+			"title":      created.Title,
+			"url":        created.URL,
+			"template": map[string]interface{}{
+				"name": templateInfo.Name,
+				"id":   templateInfo.ID,
+			},
+			"sections_filled": len(sections),
+			"auto_synced":     err != nil, // Whether we had to auto-sync
+		})
+	}
+
+	fmt.Printf("\n🎉 Issue created successfully!\n")
+	fmt.Printf("   Title: %s\n", created.Title)
+	fmt.Printf("   URL: %s\n", created.URL)
+	fmt.Printf("   Template: %s\n", templateInfo.Name)
+	if len(sections) > 0 {
+		fmt.Printf("   Sections filled: %d\n", len(sections))
+	}
+	
+	return nil
 }

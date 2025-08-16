@@ -2,6 +2,7 @@
 /dist/
 /bin/
 /build/
+linear-cli
 *.exe
 *.exe~
 *.dll

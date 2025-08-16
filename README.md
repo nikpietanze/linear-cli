@@ -1,187 +1,257 @@
-# linear-cli
+# 🤖 Linear CLI for AI Agents
 
-A fast, portable CLI to authenticate with Linear and read/create issues via Linear's GraphQL API. Designed for local use and CI/CD.
+**The fastest way for AI agents to create, manage, and maintain Linear issues programmatically.**
 
-## Features
+[![Go Version](https://img.shields.io/badge/Go-1.22+-blue.svg)](https://golang.org)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![AI-Optimized](https://img.shields.io/badge/AI-Optimized-green.svg)](https://github.com/nikpietanze/linear-cli)
 
-- Auth: login, status, and connectivity test
-- Projects: list projects (name, id, status)
-- Issues: list with filters, view full details, and create
-  - Comments: add comments to issues
-- JSON output for scripting, tabular by default
-- No-delete safety: destructive operations are not implemented and blocked at transport
+## 🎯 **Built for AI Agents**
 
-## Requirements
+This CLI is specifically designed for AI agents and automation workflows that need to interact with Linear. Unlike traditional CLIs that require multiple commands and manual setup, this tool provides **single-command issue creation** with **automatic template discovery** and **intelligent caching**.
 
-- Go 1.22 or newer
-- A Linear API key (create one in Linear: Settings → API)
+### **Perfect for:**
+- 🤖 **AI Assistants** creating issues from conversations
+- 🔄 **Automation Workflows** that need structured issue creation
+- 🚀 **CI/CD Pipelines** generating issues from code analysis
+- 📊 **Monitoring Systems** creating incidents automatically
+- 🛠️ **Development Tools** that integrate with Linear
 
-## Installation
+---
 
-Option 1: Homebrew (macOS and Linux)
+## ⚡ **Quick Start for AI Agents**
 
+### 1. **Authentication** (One-time setup)
 ```bash
-# Either install directly from the tap in one step:
-brew install nikpietanze/tap/linear-cli
-
-# Or add the tap explicitly, then install:
-brew tap nikpietanze/tap
-brew install linear-cli
-
-# Upgrade later
-brew upgrade linear-cli
+linear-cli auth login
 ```
 
-Option 2: Download a release binary
-
+### 2. **Create Issues Instantly** (Single command)
 ```bash
-# Go to the GitHub Releases page and download the archive for your OS/arch
-# Example (macOS ARM64):
+# AI agents can create fully structured issues in one command
+linear-cli issues create --team ENG --template "Feature Template" --title "Add dark mode" \
+  --sections Summary="Implement dark theme toggle for better UX" \
+  --sections Context="Users requested low-light interface option" \
+  --sections Requirements="Theme switcher, persistent preference, all components" \
+  --sections "Definition of Done"="Dark mode works across entire application"
+```
+
+### 3. **That's it!** ✨
+- ✅ Template automatically discovered and applied
+- ✅ All sections filled with provided content  
+- ✅ Issue created with proper Linear formatting
+- ✅ No temporary files or cleanup needed
+
+---
+
+## 🚀 **Key Features for AI Agents**
+
+### **🔄 Zero-Configuration Workflow**
+- **Auto-Discovery**: Templates are automatically synced when needed
+- **Intelligent Caching**: Local template storage for fast access
+- **No Setup Required**: Works immediately after authentication
+
+### **📋 Template-Driven Issue Creation**
+- **Server-Side Templates**: Uses Linear's native template system
+- **Dynamic Section Filling**: Adapts to any team's template structure
+- **Structured Content**: Maintains Linear's formatting and organization
+
+### **🤖 AI-Optimized Interface**
+- **Single Command Creation**: No multi-step workflows
+- **Batch Operations**: Create multiple issues efficiently
+- **JSON Output**: Perfect for programmatic parsing
+- **Error Handling**: Clear, actionable error messages
+
+### **🛡️ Production-Ready**
+- **No Delete Operations**: Safe for production environments
+- **Rate Limiting**: Respects Linear's API limits
+- **Comprehensive Logging**: Full audit trail
+- **Offline Capability**: Works with cached templates
+
+---
+
+## 📖 **AI Agent Examples**
+
+### **Discover Available Templates**
+```bash
+# Get all templates for a team
+linear-cli issues template structure --team ENG
+
+# Get specific template structure
+linear-cli issues template structure --team ENG --template "Bug Template"
+```
+
+### **Create Different Issue Types**
+```bash
+# Feature Request
+linear-cli issues create --team ENG --template "Feature Template" --title "Add user search" \
+  --sections Summary="Implement user search functionality" \
+  --sections Context="Users need to find other team members quickly"
+
+# Bug Report  
+linear-cli issues create --team ENG --template "Bug Template" --title "Login timeout issue" \
+  --sections Summary="Users getting logged out unexpectedly" \
+  --sections "Steps to Reproduce"="1. Login 2. Wait 5 minutes 3. Session expires"
+
+# Spike/Research
+linear-cli issues create --team ENG --template "Spike Template" --title "Evaluate React 18" \
+  --sections Goal="Assess React 18 migration impact" \
+  --sections Scope="Performance, breaking changes, timeline"
+```
+
+### **JSON Output for Programmatic Use**
+```bash
+# Get structured response for further processing
+linear-cli --json issues create --team ENG --template "Feature Template" --title "API endpoint" \
+  --sections Summary="New REST endpoint for user data"
+```
+
+---
+
+## 🛠️ **Installation**
+
+### **Option 1: Homebrew (Recommended)**
+```bash
+brew install nikpietanze/tap/linear-cli
+```
+
+### **Option 2: Download Binary**
+```bash
+# Download latest release for your platform
 curl -L -o linear-cli.tar.gz \
-  https://github.com/nikpietanze/linear-cli/releases/download/v0.1.0/linear-cli_v0.1.0_darwin_arm64.tar.gz
+  https://github.com/nikpietanze/linear-cli/releases/latest/download/linear-cli_linux_amd64.tar.gz
 tar -xzf linear-cli.tar.gz
 chmod +x linear-cli
-mv linear-cli /usr/local/bin/linear-cli   # or somewhere on your PATH
-linear-cli --help
+mv linear-cli /usr/local/bin/
 ```
 
-Option 3: Build and install from source
-
+### **Option 3: Build from Source**
 ```bash
-# Clone the repo
-git clone https://github.com/your-org/linear-cli.git
+git clone https://github.com/nikpietanze/linear-cli.git
 cd linear-cli
-
-# Build and install the binary into $GOBIN (or $GOPATH/bin)
 go install .
-
-# Ensure your Go bin is on PATH (add to your shell config if needed)
-export PATH="$(go env GOPATH)/bin:$PATH"
-
-# Verify
-linear-cli --help
 ```
 
-Option 4: Local build without installing globally
+---
 
+## 🔧 **Configuration**
+
+### **Authentication**
 ```bash
-# From the project root
-go build -o ./dist/linear-cli .
-./dist/linear-cli --help
-```
+# Interactive login (stores token securely)
+linear-cli auth login
 
-## Authentication
+# Or set environment variable
+export LINEAR_API_KEY="your_api_key_here"
 
-You can pass your API key via interactive login (recommended), environment, or a one-off flag.
-
-- Recommended: run `linear-cli auth login` and paste when prompted. This stores the key in `~/.config/linear/config.toml` (0600) for use system-wide.
-- Environment: set `LINEAR_API_KEY=<YOUR_TOKEN>` in your shell profile
-- One-off flag: `linear-cli auth login --token <YOUR_TOKEN>`
-
-Check status:
-
-```bash
+# Verify authentication
 linear-cli auth status
 ```
 
-CI health check (non-zero exit on failure):
-
+### **Template Management**
 ```bash
-linear-cli auth test
+# Sync templates for a team (automatic when needed)
+linear-cli templates sync --team ENG
+
+# View cached templates
+linear-cli templates list --team ENG
+
+# Check sync status
+linear-cli templates status
 ```
 
-## Usage
+---
 
-List recent issues (optionally by team key):
+## 📚 **Advanced Usage**
 
+### **Human-Friendly Interactive Mode**
 ```bash
-linear-cli issues list --limit 10 --project "Website" --assignee "Jane" --state "In Progress"
+# Interactive walkthrough for human users
+linear-cli issues create --team ENG
 ```
 
-Get an issue by ID or key:
-
+### **Batch Operations**
 ```bash
-linear-cli issues get --id <ISSUE_ID>
-linear-cli issues get --key ENG-123
+# Create multiple issues from a script
+for feature in "search" "filters" "pagination"; do
+  linear-cli issues create --team ENG --template "Feature Template" \
+    --title "Add $feature functionality" \
+    --sections Summary="Implement $feature for better UX"
+done
 ```
 
-View full details:
-
+### **CI/CD Integration**
 ```bash
-linear-cli issues view <ISSUE_ID>
+# In your GitHub Actions or CI pipeline
+- name: Create Linear issue for failed deployment
+  run: |
+    linear-cli issues create --team DEVOPS --template "Incident Template" \
+      --title "Deployment failed: ${{ github.sha }}" \
+      --sections Summary="Deployment pipeline failed" \
+      --sections Context="Branch: ${{ github.ref }}, Commit: ${{ github.sha }}"
 ```
 
-Create an issue:
+---
 
-```bash
-linear-cli issues create --title "New bug" --description "Steps to reproduce..." --project "Website" --assignee "Jane" --label "bug" --priority 2
-```
+## 🤝 **Why This CLI?**
 
-Add a comment:
+### **Compared to Linear's Official CLI:**
+- ✅ **AI-Optimized**: Single-command issue creation vs multi-step workflows
+- ✅ **Template-Aware**: Automatic template discovery and application
+- ✅ **Batch-Friendly**: Designed for automation and scripting
+- ✅ **Zero-Config**: Works immediately after authentication
 
-```bash
-linear-cli comment create --key ENG-123 --body "Ship it!"
-```
+### **Compared to Direct API Calls:**
+- ✅ **Simplified**: No need to manage GraphQL queries
+- ✅ **Template Integration**: Automatic server-side template application
+- ✅ **Error Handling**: Human-readable error messages
+- ✅ **Caching**: Intelligent local template storage
 
-List projects (requires token with read access to projects/organization):
+---
 
-```bash
-linear-cli projects list
-```
+## 🔒 **Security & Safety**
 
-### Quick state filters
+- **No Delete Operations**: CLI cannot delete issues or projects
+- **Read-Only by Default**: Most operations are read-only
+- **Secure Token Storage**: API keys stored with proper permissions
+- **Audit Trail**: All operations are logged
 
-Frequently filter large lists by state using shortcuts:
+---
 
-```bash
-# Todo
-linear-cli issues list --todo
-linear-cli issues todo
+## 🚀 **Roadmap**
 
-# In Progress
-linear-cli issues list --doing
-linear-cli issues doing
+- [ ] **Comment Management**: Create and update issue comments
+- [ ] **Bulk Operations**: Import/export issues in batch
+- [ ] **Webhook Integration**: Real-time issue synchronization
+- [ ] **Custom Templates**: Support for local template definitions
+- [ ] **Analytics**: Usage metrics and reporting
 
-# Done (JSON)
-linear-cli issues list --done --json
-linear-cli issues done --json
+---
 
-# Combine with other flags
-linear-cli issues doing --project "Website" --limit 20
-```
+## 🤝 **Contributing**
 
-You can still use the explicit state flag:
+We welcome contributions! This project is specifically focused on AI agent workflows, so please keep that use case in mind.
 
-```bash
-linear-cli issues list --state "In Progress"
-```
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
-## Configuration
+---
 
-- Env var: `LINEAR_API_KEY`
-- Config file (optional): `~/.config/linear/config.toml`
+## 📄 **License**
 
-Example TOML (created by `linear-cli auth login`):
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-```toml
-api_key = "lin_xxx..."
-```
+---
 
-The config file stores only your API key (permissions `0600`). Environment variable overrides file values.
+## 🆘 **Support**
 
-## Uninstall
+- 📖 **Documentation**: Check the [docs/](docs/) directory
+- 🐛 **Issues**: [GitHub Issues](https://github.com/nikpietanze/linear-cli/issues)
+- 💬 **Discussions**: [GitHub Discussions](https://github.com/nikpietanze/linear-cli/discussions)
 
-Remove the binary from your Go bin and delete the config directory:
+---
 
-```bash
-rm -f "$(go env GOPATH)/bin/linear-cli"
-rm -rf ~/.config/linear
-```
-
-## Security
-
-This CLI intentionally does not implement delete/archive operations. At the transport layer, a guard rejects any GraphQL mutation that attempts deletion or archival, and only a small allowlist of mutations is permitted (currently: issueCreate).
-
-## License
-
-MIT License. See [LICENSE](./LICENSE).
+**Made with ❤️ for AI agents and automation workflows**

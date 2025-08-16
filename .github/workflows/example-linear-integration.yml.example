@@ -1,0 +1,59 @@
+# Example: Create Linear issues from GitHub events
+# Copy this file to .github/workflows/linear-integration.yml and customize
+
+name: Linear Integration
+
+on:
+  issues:
+    types: [opened, labeled]
+  pull_request:
+    types: [opened, closed]
+  workflow_run:
+    workflows: ["CI", "Deploy"]
+    types: [completed]
+
+jobs:
+  create-linear-issue:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Linear CLI
+        run: |
+          curl -L -o linear-cli.tar.gz \
+            https://github.com/nikpietanze/linear-cli/releases/latest/download/linear-cli_linux_amd64.tar.gz
+          tar -xzf linear-cli.tar.gz
+          chmod +x linear-cli
+          sudo mv linear-cli /usr/local/bin/
+
+      - name: Create issue on deployment failure
+        if: github.event.workflow_run.conclusion == 'failure'
+        run: |
+          linear-cli issues create --team DEVOPS --template "Incident Template" \
+            --title "🚨 Deployment Failed: ${{ github.event.workflow_run.head_sha }}" \
+            --sections Summary="Production deployment failed and requires immediate attention" \
+            --sections Context="Repository: ${{ github.repository }}, Branch: ${{ github.event.workflow_run.head_branch }}" \
+            --sections "Steps to Reproduce"="1. Check GitHub Actions logs 2. Review failed commit 3. Identify root cause" \
+            --sections Severity="High - Production impact"
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+
+      - name: Create issue for bug reports
+        if: github.event.action == 'labeled' && contains(github.event.label.name, 'bug')
+        run: |
+          linear-cli issues create --team ENG --template "Bug Template" \
+            --title "🐛 ${{ github.event.issue.title }}" \
+            --sections Summary="${{ github.event.issue.body }}" \
+            --sections Context="GitHub Issue: ${{ github.event.issue.html_url }}" \
+            --sections "Reported By"="${{ github.event.issue.user.login }}"
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+
+      - name: Create issue for feature requests  
+        if: github.event.action == 'labeled' && contains(github.event.label.name, 'enhancement')
+        run: |
+          linear-cli issues create --team ENG --template "Feature Template" \
+            --title "✨ ${{ github.event.issue.title }}" \
+            --sections Summary="${{ github.event.issue.body }}" \
+            --sections Context="GitHub Issue: ${{ github.event.issue.html_url }}" \
+            --sections "Requested By"="${{ github.event.issue.user.login }}"
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
